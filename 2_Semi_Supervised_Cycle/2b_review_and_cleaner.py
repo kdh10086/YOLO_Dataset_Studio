@@ -6,227 +6,143 @@ import yaml
 import argparse
 
 # ==============================================================================
-# 초기 실행 설정 (Initiation Settings)
-#
-# - Code Runner 또는 IDE에서 '직접 실행' 시 이 부분을 수정하여 사용하세요.
-# - 터미널에서 인자를 직접 지정하면 이 설정은 무시됩니다.
-# - 값을 None으로 두면 _config.yaml의 기본 설정을 따릅니다.
+# Initiation Settings
 # ==============================================================================
-INIT_DATASET_DIR = None      # 예시: 'datasets/track_dataset_0811'
-INIT_MODE = 'visualize'      # 'visualize' 또는 'remove_noise'
-INIT_CLEANED_DIR = None      # remove_noise 모드에서 사용할 출력 폴더. 예: 'datasets/cleaned_data'
+# These global variables define the default parameters for the visualizer script.
+# They are used as fallbacks if corresponding command-line arguments are not
+# provided, allowing the script to run with a predefined configuration.
+
+# Default relative path to the dataset directory to be processed.
+INIT_DATASET_DIR = None
+
+# Default execution mode ('visualize' or 'remove_noise').
+INIT_MODE = 'visualize'
+
+# Default relative path for saving the cleaned dataset in 'remove_noise' mode.
+INIT_CLEANED_DIR = None
 # ==============================================================================
 
 class Visualizer:
     """
-    라벨링된 데이터셋을 시각화하고 검토/정제하는 클래스.
+    A class to visualize, review, and clean a labeled dataset.
     """
     def __init__(self, dataset_dir, mode, cleaned_dir, config):
-        self.dataset_dir = dataset_dir
-        self.mode = mode
-        self.cleaned_dir = cleaned_dir
-        self.config = config
-        
-        self.classes = config['classes']
-        self.colors = {cid: ((cid*40+50)%256, (cid*80+100)%256, (cid*120+150)%256) for cid in self.classes.keys()}
-        
-        self.is_paused = True
-        self.img_index = 0
-        self.review_files = set()
-        self.noise_files = set()
-        
-        self.window_name = f"Label Visualizer - {self.mode.upper()} MODE"
+        self.dataset_dir, self.mode, self.cleaned_dir, self.config = dataset_dir, mode, cleaned_dir, config
+        self.classes = config['model_configurations']['classes']
+        self.colors = {c:((c*40+50)%256, (c*80+100)%256, (c*120+150)%256) for c in self.classes.keys()}
+        self.is_paused, self.img_index = True, 0
+        self.review_files, self.noise_files = set(), set()
+        self.window_name = f"Label Visualizer"
         cv2.namedWindow(self.window_name)
         cv2.setMouseCallback(self.window_name, self._mouse_callback)
-
         self.image_paths, self.is_split = self._load_image_paths()
 
     def _load_image_paths(self):
-        """데이터셋 구조(분할/통합)를 자동으로 감지하고 모든 이미지 경로를 로드합니다."""
-        image_formats = self.config['image_format'].split(',')
-        paths = []
-        
-        # 분할 구조인지 확인 (images/train 폴더 존재 여부 기준)
+        """Automatically detects dataset structure (split/unified) and loads all image paths."""
+        img_fmts = self.config['workflow_parameters']['image_format'].split(',')
         is_split = os.path.isdir(os.path.join(self.dataset_dir, 'images', 'train'))
-        
+        print(f"  - Dataset Structure: {'Split' if is_split else 'Unified'}")
         if is_split:
-            print("  - 데이터셋 구조: 분할됨 (train/val 폴더에서 이미지를 불러옵니다)")
-            for sub_dir in ['train', 'val']:
-                for fmt in image_formats:
-                    paths.extend(glob.glob(os.path.join(self.dataset_dir, 'images', sub_dir, f'*.{fmt}')))
+            base_dirs = [os.path.join(self.dataset_dir, 'images', sub) for sub in ['train', 'val']]
         else:
-            print("  - 데이터셋 구조: 통합됨 (images 폴더에서 이미지를 바로 불러옵니다)")
-            images_dir = os.path.join(self.dataset_dir, 'images')
-            for fmt in image_formats:
-                paths.extend(glob.glob(os.path.join(images_dir, f'*.{fmt}')))
-        
+            base_dirs = [os.path.join(self.dataset_dir, 'images')]
+        paths = [p for d in base_dirs for fmt in img_fmts for p in glob.glob(os.path.join(d, f'*.{fmt}'))]
         return sorted(paths), is_split
 
     def _mouse_callback(self, event, x, y, flags, param):
-        """마우스 클릭 이벤트를 처리합니다."""
+        """Handles mouse click events."""
         if event == cv2.EVENT_LBUTTONDOWN:
-            image_name = os.path.basename(self.image_paths[self.img_index])
-            
-            if self.mode == 'visualize':
-                target_set = self.review_files
-                msg = "검토 목록"
-            else: # remove_noise
-                target_set = self.noise_files
-                msg = "제거 대상"
-
-            if image_name not in target_set:
-                target_set.add(image_name)
-                print(f"  -> '{image_name}' {msg}에 추가됨 (총 {len(target_set)}개)")
-            else:
-                target_set.remove(image_name)
-                print(f"  -> '{image_name}' {msg}에서 제거됨 (총 {len(target_set)}개)")
+            img_name = os.path.basename(self.image_paths[self.img_index])
+            target_set, msg = (self.review_files, "review list") if self.mode == 'visualize' else (self.noise_files, "removal list")
+            action = "added" if img_name not in target_set else "removed"
+            (target_set.add if action == "added" else target_set.remove)(img_name)
+            print(f"  -> '{img_name}' {action} to {msg} (Total: {len(target_set)})")
 
     def _create_cleaned_dataset(self):
-        """노이즈로 지정된 프레임을 제외하고 새 데이터셋 폴더에 저장합니다."""
-        print(f"\n[노이즈 제거] '{self.cleaned_dir}' 폴더에 정리된 데이터셋을 저장합니다.")
-
+        """Saves a new dataset excluding frames marked as noise."""
+        print(f"\n[Noise Removal] Saving cleaned dataset to '{self.cleaned_dir}'.")
         if os.path.exists(self.cleaned_dir):
-            print(f"  - 경고: 기존 '{self.cleaned_dir}' 폴더를 삭제하고 새로 생성합니다.")
-            shutil.rmtree(self.cleaned_dir)
-        
+            shutil.rmtree(self.cleaned_dir); print(f"  - Warning: Deleting existing '{self.cleaned_dir}' and creating a new one.")
         cleaned_images_dir = os.path.join(self.cleaned_dir, 'images')
         cleaned_labels_dir = os.path.join(self.cleaned_dir, 'labels')
-        os.makedirs(cleaned_images_dir, exist_ok=True)
-        os.makedirs(cleaned_labels_dir, exist_ok=True)
-        
+        os.makedirs(cleaned_images_dir); os.makedirs(cleaned_labels_dir)
         copied_count = 0
-        for image_path in self.image_paths:
-            image_filename = os.path.basename(image_path)
-            
-            if image_filename not in self.noise_files:
-                label_filename = os.path.splitext(image_filename)[0] + '.txt'
-                
-                # 라벨 파일 경로 추적
-                if self.is_split:
-                    sub_dir = os.path.basename(os.path.dirname(image_path))
-                    original_label_path = os.path.join(self.dataset_dir, 'labels', sub_dir, label_filename)
-                else:
-                    original_label_path = os.path.join(self.dataset_dir, 'labels', label_filename)
-                
-                # 새 경로에 이미지와 라벨 복사 (라벨은 통합된 구조로 저장)
-                shutil.copy2(image_path, os.path.join(cleaned_images_dir, image_filename))
-                if os.path.exists(original_label_path):
-                    shutil.copy2(original_label_path, os.path.join(cleaned_labels_dir, label_filename))
+        for img_path in self.image_paths:
+            img_filename = os.path.basename(img_path)
+            if img_filename not in self.noise_files:
+                sub_dir = os.path.basename(os.path.dirname(img_path)) if self.is_split else ''
+                label_filename = os.path.splitext(img_filename)[0] + '.txt'
+                label_path = os.path.join(self.dataset_dir, 'labels', sub_dir, label_filename)
+                shutil.copy2(img_path, os.path.join(cleaned_images_dir, img_filename))
+                if os.path.exists(label_path): shutil.copy2(label_path, os.path.join(cleaned_labels_dir, label_filename))
                 copied_count += 1
-
-        print(f"  - 총 {len(self.image_paths)}개 중 {len(self.noise_files)}개의 노이즈 프레임을 제외하고,")
-        print(f"  - {copied_count}개의 파일을 성공적으로 복사했습니다.")
+        print(f"  - Excluded {len(self.noise_files)} noise frames from {len(self.image_paths)} total, copied {copied_count} files.")
 
     def run(self):
-        """시각화 메인 루프를 실행합니다."""
-        if not self.image_paths:
-            print(f"오류: '{self.dataset_dir}' 경로에서 이미지를 찾을 수 없습니다.")
-            return
-
-        print("\n조작법: [Space]: 자동재생/일시정지 | [d]: 다음 | [a]: 이전 | [마우스클릭]: 선택/해제 | [q]: 종료")
-        
+        """Runs the main visualization loop."""
+        if not self.image_paths: print(f"Error: No images found in '{self.dataset_dir}'."); return
+        print("\nControls: [Space]: Autoplay/Pause | [d]: Next | [a]: Previous | [Click]: Select/Deselect | [q]: Quit")
         while 0 <= self.img_index < len(self.image_paths):
-            image_path = self.image_paths[self.img_index]
-            image_name = os.path.basename(image_path)
-            
-            # 라벨 파일 경로 추적
-            label_filename = os.path.splitext(image_name)[0] + '.txt'
-            if self.is_split:
-                sub_dir = os.path.basename(os.path.dirname(image_path))
-                label_path = os.path.join(self.dataset_dir, 'labels', sub_dir, label_filename)
-            else:
-                label_path = os.path.join(self.dataset_dir, 'labels', label_filename)
-
-            img = cv2.imread(image_path)
+            img_path = self.image_paths[self.img_index]; img_name = os.path.basename(img_path)
+            sub_dir = os.path.basename(os.path.dirname(img_path)) if self.is_split else ''
+            label_path = os.path.join(self.dataset_dir, 'labels', sub_dir, os.path.splitext(img_name)[0] + '.txt')
+            img = cv2.imread(img_path)
             if img is None: self.img_index += 1; continue
+            
+            cv2.setWindowTitle(self.window_name, f"Label Visualizer - {self.mode.upper()} MODE | {img_name}")
+            
             h, w = img.shape[:2]
-
-            # 바운딩 박스 그리기
             if os.path.exists(label_path):
                 with open(label_path, 'r') as f:
                     for line in f:
                         parts = line.strip().split()
-                        class_id, x_c, y_c, bw, bh = int(parts[0]), *map(float, parts[1:5])
-                        x1, y1 = int((x_c - bw / 2) * w), int((y_c - bh / 2) * h)
-                        x2, y2 = int((x_c + bw / 2) * w), int((y_c + bh / 2) * h)
-                        color = self.colors.get(class_id, (255, 255, 255))
-                        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-                        label = f'{class_id}: {self.classes.get(class_id, "Unknown")}'
-                        cv2.putText(img, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-            
-            # 상태 텍스트 그리기
-            if self.mode == 'visualize' and image_name in self.review_files:
-                cv2.putText(img, "REVIEW", (20, 50), cv2.FONT_HERSHEY_TRIPLEX, 1.5, (0, 0, 255), 3)
-            elif self.mode == 'remove_noise' and image_name in self.noise_files:
-                cv2.putText(img, "TO BE REMOVED", (20, 50), cv2.FONT_HERSHEY_TRIPLEX, 1.5, (50, 50, 200), 3)
-            
+                        cid, xc, yc, bw, bh = int(parts[0]), *map(float, parts[1:5])
+                        x1,y1,x2,y2 = int((xc-bw/2)*w), int((yc-bh/2)*h), int((xc+bw/2)*w), int((yc+bh/2)*h)
+                        color = self.colors.get(cid, (255,255,255))
+                        cv2.rectangle(img, (x1,y1), (x2,y2), color, 2)
+                        cv2.putText(img, f'{cid}:{self.classes.get(cid, "Unknown")}', (x1,y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            if self.mode == 'visualize' and img_name in self.review_files:
+                cv2.putText(img, "REVIEW", (20,50), cv2.FONT_HERSHEY_TRIPLEX, 1.5, (0,0,255), 3)
+            elif self.mode == 'remove_noise' and img_name in self.noise_files:
+                cv2.putText(img, "TO BE REMOVED", (20,50), cv2.FONT_HERSHEY_TRIPLEX, 1.5, (50,50,200), 3)
             cv2.imshow(self.window_name, img)
-            
             key = cv2.waitKey(100 if not self.is_paused else -1) & 0xFF
-            
             if key == ord('q'): break
             elif key == ord(' '): self.is_paused = not self.is_paused
-            
             if self.is_paused:
                 if key == ord('d'): self.img_index = min(self.img_index + 1, len(self.image_paths) - 1)
                 elif key == ord('a'): self.img_index = max(self.img_index - 1, 0)
-            else:
-                self.img_index += 1
-                
-        # 종료 시 후처리
+            else: self.img_index += 1
         if self.mode == 'visualize' and self.review_files:
             review_list_path = os.path.join(self.dataset_dir, 'review_list.txt')
-            with open(review_list_path, 'w') as f:
-                f.write('\n'.join(sorted(list(self.review_files))))
-            print(f"\n'{review_list_path}' 파일에 검토 목록 저장 완료.")
-        
-        elif self.mode == 'remove_noise' and self.noise_files:
-            self._create_cleaned_dataset()
-
-        cv2.destroyAllWindows()
-        print("\n시각화 도구를 종료합니다.")
+            with open(review_list_path, 'w') as f: f.write('\n'.join(sorted(list(self.review_files))))
+            print(f"\nReview list saved to '{review_list_path}'.")
+        elif self.mode == 'remove_noise' and self.noise_files: self._create_cleaned_dataset()
+        cv2.destroyAllWindows(); print("\nVisualizer tool closed.")
 
 def main(config, args):
-    """설정값을 결정하고 Visualizer를 실행합니다."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-    dataset_dir_relative = args.dataset if args.dataset is not None else \
-                           INIT_DATASET_DIR if INIT_DATASET_DIR is not None else \
-                           config['datasets']['raw'] # visualize는 보통 대용량 데이터셋에 사용
-    dataset_dir = os.path.join(project_root, dataset_dir_relative)
     
-    mode = args.mode if args.mode is not None else INIT_MODE
+    dataset_rel = args.dataset or INIT_DATASET_DIR or config['dataset_paths'].get('reviewed_dataset', 'datasets/default_review')
+    dataset_dir = os.path.join(project_root, dataset_rel)
+    mode = args.mode or INIT_MODE
+    cleaned_dir_rel = args.output_dir or INIT_CLEANED_DIR or config['dataset_paths'].get('reviewed_dataset', 'datasets/default_cleaned')
+    cleaned_dir = os.path.join(project_root, cleaned_dir_rel)
     
-    cleaned_dir_relative = args.output_dir if args.output_dir is not None else \
-                           INIT_CLEANED_DIR if INIT_CLEANED_DIR is not None else \
-                           config['datasets']['denoised']
-    cleaned_dir = os.path.join(project_root, cleaned_dir_relative)
-
-    print("\n" + "="*50)
-    print("라벨 시각화 및 검토 도구를 시작합니다.")
-    print("="*50)
-    print(f"  - 대상 데이터셋: {dataset_dir}")
-    print(f"  - 실행 모드: {mode}")
-    if mode == 'remove_noise':
-        print(f"  - 정제 데이터셋 출력 경로: {cleaned_dir}")
-    print("="*50)
-
-    visualizer = Visualizer(dataset_dir, mode, cleaned_dir, config)
-    visualizer.run()
+    print("\n" + "="*50); print("Starting Label Visualizer and Cleaner."); print("="*50)
+    print(f"  - Target Dataset: {dataset_dir}"); print(f"  - Mode: {mode}")
+    if mode == 'remove_noise': print(f"  - Cleaned Data Output Path: {cleaned_dir}"); print("="*50)
+    
+    visualizer = Visualizer(dataset_dir, mode, cleaned_dir, config); visualizer.run()
 
 if __name__ == "__main__":
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
-        with open(os.path.join(project_root, '_config.yaml'), 'r') as f:
-            config = yaml.safe_load(f)
-    except FileNotFoundError:
-        print("오류: _config.yaml 파일을 찾을 수 없습니다. 프로젝트 루트에 파일이 있는지 확인하세요.")
-        exit()
-
-    parser = argparse.ArgumentParser(description="라벨링된 데이터셋을 시각화하거나 노이즈를 제거합니다.")
-    parser.add_argument('--dataset', type=str, default=None, help="작업할 데이터셋의 상대 경로.")
-    parser.add_argument('--mode', type=str, default=None, choices=['visualize', 'remove_noise'], help="실행 모드 선택.")
-    parser.add_argument('--output_dir', type=str, default=None, help="'remove_noise' 모드에서 정제된 데이터셋을 저장할 경로.")
+        with open(os.path.join(project_root, '_config.yaml'), 'r') as f: config = yaml.safe_load(f)
+    except FileNotFoundError: print("Error: _config.yaml not found."); exit()
+    parser = argparse.ArgumentParser(description="Visualizes labeled datasets or removes noise.")
+    parser.add_argument('--dataset', type=str, default=None, help="Relative path to the dataset to process.")
+    parser.add_argument('--mode', type=str, default=None, choices=['visualize', 'remove_noise'], help="Select execution mode.")
+    parser.add_argument('--output_dir', type=str, default=None, help="Path to save the cleaned dataset in 'remove_noise' mode.")
     args = parser.parse_args()
-    
     main(config, args)

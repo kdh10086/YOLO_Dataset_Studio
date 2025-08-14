@@ -1,29 +1,35 @@
-# End-to-End YOLO Dataset Pipeline with Semi-Supervised & Teacher-Student Learning
+# End-to-End YOLO Model Training Pipeline with Semi-Supervised Learning
 
-This is an end-to-end pipeline for building a custom YOLO dataset from images extracted from a ROS2 Bag. It progressively refines the dataset through **Semi-Supervised Learning** and a **Teacher-Student** architecture to train a final model.
+## 1. Overview
 
-The goal is to efficiently process large-scale, unstructured data collected in autonomous driving environments with minimal manual labeling, enabling the model to expand the dataset on its own and thereby maximize performance.
+This project provides a comprehensive, end-to-end pipeline for creating a custom, lightweight YOLO "Student" model tailored for specific environments with limited computing resources.
 
----
+The core strategy is **bootstrapping** via a semi-supervised learning cycle. It begins by training an initial "Teacher" model on a small, manually-labeled dataset. This Teacher model then automatically labels a larger pool of unlabeled images. After human review and correction, this newly labeled data is used to retrain a more robust Teacher model. This iterative process efficiently builds a large-scale, high-quality dataset, which is finally used to train the optimized, lightweight Student model for deployment.
 
-## Key Features
-
-* **ROS2 Integration**: Directly extracts image frames from ROS2 Bags, unifying the process from data collection to model training.
-* **Teacher-Student Architecture**: Employs an efficient strategy where a more complex Teacher model builds a high-quality dataset, which is then used to train a lighter or different architecture Student model.
-* **Semi-Supervised Learning Cycle**: Provides an iterative workflow where a Teacher model, created from a small, manually labeled dataset, automatically labels new data. The user then reviews and corrects these labels to progressively improve both the dataset and the model's performance.
-* **Intelligent Data Sampling**: Through Active Learning, the pipeline can intelligently select the most informative data for labeling to maximize performance gains.
-* **Modular Workflow**: The entire pipeline is organized into three distinct phases and a set of auxiliary tools, making it easy to understand the project flow and selectively execute specific tasks.
+The entire workflow is managed through a series of modular scripts and a central configuration file, `_config.yaml`.
 
 ---
 
-## Project Structure
+## 2. Features
+
+- **ROS2 Bag Extraction**: Directly extract image frames from ros2bag files.
+- **Manual & Auto Labeling**: Includes a feature-rich GUI for manual labeling and a script for automated pseudo-labeling.
+- **Data Review & Cleaning**: Tools for visually inspecting labels, marking images for review, and cleaning noisy data.
+- **Semi-Supervised Cycle**: An iterative workflow to progressively improve the model and dataset size.
+- **Teacher-Student Architecture**: Train a powerful Teacher model to supervise the training of a lightweight Student model.
+- **Centralized Configuration**: Easily manage all paths, models, and hyperparameters from `_config.yaml`.
+
+---
+
+## 3. Project Structure
 ```
 .
 ├── 1_Initial_Teacher_Workflow/
 │   ├── 1a_extract_from_bag.py
 │   ├── 1b_manual_labeler.py
-│   ├── 1c_split_for_training.py
-│   └── 1d_train_teacher_model.py
+│   ├── 1c_view_simple_labels.py
+│   ├── 1d_split_for_training.py
+│   └── 1e_train_teacher_model.py
 ├── 2_Semi_Supervised_Cycle/
 │   ├── 2a_auto_labeler.py
 │   ├── 2b_review_and_cleaner.py
@@ -33,9 +39,8 @@ The goal is to efficiently process large-scale, unstructured data collected in a
 ├── advanced_features/
 │   └── active_learning_sampler.py
 ├── tools/
-│   ├── view_simple_labels.py
 │   ├── merge_datasets.py
-│   └── sample_dataset.py
+│   └── random_sample_dataset.py
 ├── datasets/
 ├── runs/
 ├── _config.yaml
@@ -45,173 +50,148 @@ The goal is to efficiently process large-scale, unstructured data collected in a
 
 ---
 
-## Full Workflow Guide
+## 4. Prerequisites & Setup
 
-This pipeline proceeds in three main phases.
-
-### **Phase 1: Initial Teacher Model Construction (`1_Initial_Teacher_Workflow`)**
-
-This is the starting point for the entire process, dedicated to creating the first "Teacher" model.
-
-1.  **`1a_extract_from_bag.py`**: Extracts images from a ROS2 Bag file.
-2.  **`1b_manual_labeler.py`**: Manually and accurately label a **small sample** of the extracted images.
-3.  **`1c_split_for_training.py`**: Splits the labeled dataset into `train/val` sets and generates the necessary `data.yaml` file for training.
-4.  **`1d_train_teacher_model.py`**: Trains the first **Teacher model** on the split dataset.
-
-### **Phase 2: Semi-Supervised Cycle (`2_Semi_Supervised_Cycle`)**
-
-This is the core iterative cycle that uses the Teacher model from Phase 1 to expand the dataset and improve performance.
-
-1.  **`2a_auto_labeler.py`**: Uses the trained Teacher model to **automatically generate labels** for a large number of unlabeled images.
-2.  **`2b_review_and_cleaner.py`**: Visually **reviews and corrects** the automatically generated labels to ensure data quality.
-3.  **Merge and Retrain**:
-    * Use `tools/merge_datasets.py` to combine the newly reviewed data with the existing dataset.
-    * Run `1c_split_for_training.py` again to re-split the expanded dataset.
-    * Execute `2c_retrain_model.py` to **retrain** the Teacher model with the larger, more refined dataset, thereby improving its performance.
-4.  **Repeat this process** multiple times to build a large-scale, high-quality dataset.
-
-### **Phase 3: Final Student Model Training (`3_Final_Student_Training`)**
-
-This is the final stage, where the complete dataset created in Phase 2 is used to train the desired **Student model**.
-
-1.  **Modify `_config.yaml`**: Specify the type of Student model to be trained (e.g., `yolov10n.pt`) and the path to the final dataset.
-2.  **`3a_train_student_model.py`**: Trains the Student model on the final dataset to obtain a lightweight yet high-performance model.
+1.  **Install Dependencies**:
+    ```bash
+    pip install -r requirements.txt
+    ```
+2.  **Configure `_config.yaml`**: Before running any scripts, open `_config.yaml` and carefully set all required paths (especially `ros2bag_directory`) and parameters. The comments in the file explain the purpose of each variable.
 
 ---
 
-## Installation and Setup
+## 3. Workflow and Detailed Usage Guide
 
-### **1. Clone the Repository**
+This section provides a step-by-step guide on how to use the package to create your custom model.
 
+### Phase 1: Initial Dataset and First Teacher Model
+
+The goal of this phase is to create a small, high-quality, manually-labeled dataset and use it to train an initial "Teacher" model.
+
+* **Step 1.1: Extract Initial Frames**
+    * **Goal**: Select a small, diverse set of images to serve as the initial seed for your dataset.
+    * **Action**: Run `1a_extract_from_bag.py` to extract approximately 200 dynamically changing frames from your ROS bag file. Save them to your initial dataset directory (e.g., `datasets/sample_dataset/images`).
+
+* **Step 1.2: Manual Labeling**
+    * **Goal**: Manually label the initial set of images.
+    * **Action**: Run `1b_manual_labeler.py`. Set the target dataset in the script or via command-line arguments. Carefully draw bounding boxes and assign classes to all objects in the images.
+
+* **Step 1.3: Review and Refine**
+    * **Goal**: Check the manually labeled data for errors and correct them.
+    * **Action**: Run `1c_view_simple_labels.py` to visually inspect your work. If you find an image with an error, left-click on it. This adds the image's filename to a `review.txt` file. Once you have a list of files to fix, run `1b_manual_labeler.py` again. The script can be started in a "review mode" to load only the images from `review.txt` for correction. Repeat this process until your dataset is accurate.
+
+* **Step 1.4: Prepare for Training**
+    * **Goal**: Structure the dataset correctly for YOLO training.
+    * **Action**: Run `1d_split_for_training.py` on your verified dataset directory. This script will automatically split your images and labels into `train/` and `val/` subdirectories and generate the necessary `data.yaml` file.
+
+* **Step 1.5: Train the First Teacher Model**
+    * **Goal**: Train the first iteration of the Teacher model.
+    * **Action**: Run `1e_train_teacher_model.py`. Ensure the `dataset_paths` in `_config.yaml` point to your prepared dataset. This will produce the first set of model weights (e.g., `best.pt`), which are essential for the next phase.
+
+### Phase 2: Bootstrapping and Improving the Teacher
+
+The goal here is to use the first Teacher model to label more data, then use that expanded dataset to train a better Teacher model.
+
+* **Step 2.1: Create a Large Unlabeled Pool**
+    * **Goal**: Extract all available frames to create a large pool of data for auto-labeling.
+    * **Action**: Run `1a_extract_from_bag.py` again, but this time, extract all frames from the bag file into a new directory for your large-scale dataset.
+
+* **Step 2.2: Create a Medium-Sized Sample**
+    * **Goal**: Select a manageable subset of the large pool for the first bootstrapping cycle.
+    * **Action**: Run `tools/random_sample_dataset.py`. Point it to the large dataset directory created in the previous step and generate a random sample of approximately 400 images.
+
+* **Step 2.3: Auto-Label the Sampled Data**
+    * **Goal**: Use the first Teacher model to automatically generate labels for the 400-image dataset.
+    * **Action**: In `_config.yaml`, update the `semi_supervised_weights` path to point to the `best.pt` file from Phase 1. Then, run `2a_auto_labeler.py` on the 400-image dataset.
+
+* **Step 2.4: Review the Auto-Labeled Data**
+    * **Goal**: Clean and correct the pseudo-labels generated by the Teacher model.
+    * **Action**: Use `2b_review_and_cleaner.py` to inspect the auto-labeled results. You can mark entire frames for deletion or add them to a `review_list.txt` for fine-tuning. If corrections are needed, use `1b_manual_labeler.py` (in review mode) to fix the labels. Use `1c_view_simple_labels.py` as needed to verify.
+
+* **Step 2.5: Merge Datasets**
+    * **Goal**: Combine the initial manually labeled data with the new, cleaned auto-labeled data.
+    * **Action**: Run `tools/merge_datasets.py`. Set the input directories to your initial dataset (~200 images) and the cleaned auto-labeled dataset (~400 images). This creates a new, larger `merged_dataset`.
+
+* **Step 2.6: Prepare and Retrain the Teacher**
+    * **Goal**: Train a new, improved Teacher model on the larger, combined dataset.
+    * **Action**: First, run `1d_split_for_training.py` on the `merged_dataset`. Then, run `2c_retrain_model.py`. You may consider using a model architecture with more parameters (e.g., YOLOv8m instead of YOLOv8n) in `_config.yaml` to create a more powerful Teacher.
+
+### Phase 3: Final Dataset Creation and Student Model Training
+
+This final phase uses the improved Teacher model to create the full, high-quality dataset and train the final, lightweight Student model.
+
+* **Step 3.1: Large-Scale Auto-Labeling**
+    * **Goal**: Label the entire pool of extracted images using the improved Teacher model.
+    * **Action**: In `_config.yaml`, update the `semi_supervised_weights` path to the `best.pt` file from the *retrained* Teacher in Phase 2. Run `2a_auto_labeler.py` on the full dataset extracted in Step 2.1.
+
+* **Step 3.2: Final Review**
+    * **Goal**: Ensure the final large-scale dataset is as clean as possible.
+    * **Action**: Perform a final review and correction pass on the entire dataset using `2b_review_and_cleaner.py` and `1b_manual_labeler.py` as needed.
+
+* **Step 3.3: Train the Final Student Model**
+    * **Goal**: Train the final, small, and efficient model for deployment.
+    * **Action**: In `_config.yaml`, configure the `student_model_config` section, choosing a lightweight architecture (e.g., `yolov10s`). Ensure `final_training_dataset` points to your completed large-scale dataset. Run `3a_train_student_model.py`.
+
+* **Step 3.4: Deployment**
+    * **Goal**: Use the trained model.
+    * **Action**: The resulting Student model (`best.pt` from the final training run) is now optimized for your specific environment and ready for deployment.
+
+* **Step 3.5: Post-Training Robustness Improvement (Optional)**
+    * **Goal**: Enhance the model's robustness if it performs poorly on new, unseen data.
+    * **Action**: Test the trained Student model on a new dataset created from a different ROS bag file. If the model shows weakness in certain environments, use `advanced_features/active_learning_sampler.py` on the new data. This will intelligently select additional images from the weak environments. Merge these newly selected images with your existing large-scale dataset and retrain the Student model. This process can significantly improve the model's generalization and robustness.
+
+---
+
+## 6. Script Descriptions
+
+### 1_Initial_Teacher_Workflow
+- `1a_extract_from_bag.py`: Extracts image frames from a ROS2 bag file.
+- `1b_manual_labeler.py`: A GUI tool for drawing, deleting, and editing bounding box labels.
+- `1c_view_simple_labels.py`: A simple viewer to display images with their YOLO labels and manage a review list.
+- `1d_split_for_training.py`: Splits a dataset into training/validation sets and generates a `data.yaml` file.
+- `1e_train_teacher_model.py`: Trains the initial YOLO Teacher model.
+
+### 2_Semi_Supervised_Cycle
+- `2a_auto_labeler.py`: Uses a pre-trained Teacher model to automatically generate labels for unlabeled images.
+- `2b_review_and_cleaner.py`: A GUI tool to visualize auto-labeled data, mark noisy frames for removal, or flag images for manual review.
+- `2c_retrain_model.py`: Retrains the Teacher model on a larger, combined dataset.
+
+### 3_Final_Student_Training
+- `3a_train_student_model.py`: Trains the final, lightweight Student model.
+
+### advanced_features
+- `active_learning_sampler.py`: Intelligently selects a diverse subset of images for labeling from a large pool based on model uncertainty and feature clustering.
+
+### tools
+- `merge_datasets.py`: Combines multiple dataset folders into a single, new dataset.
+- `random_sample_dataset.py`: Creates a smaller, randomly sampled subset from a larger dataset.
+
+---
+
+## 7. General Usage
+
+There are two primary ways to run the scripts in this project: from the command line or directly within a VS Code environment.
+
+### Method 1: Command Line Interface
+
+Each script can be run from your terminal. This method is flexible as it allows you to override any default setting from `_config.yaml` by passing command-line arguments.
+
+For example, to run the auto-labeler on a specific dataset with a custom confidence threshold:
 ```bash
-git clone https://github.com/kdh10086/Creating-a-YOLO-Custom-Dataset-from-a-ros2bag-image_raw-Topic.git
-cd Creating-a-YOLO-Custom-Dataset-from-a-ros2bag-image_raw-Topic
+# Run the auto-labeler with custom arguments
+python 2_Semi_Supervised_Cycle/2a_auto_labeler.py --dataset path/to/my/dataset --weights path/to/model.pt --conf 0.4
 ```
 
-### 2. Install Dependencies
-
-Install all required libraries using the `requirements.txt` file
-
+To see all available arguments for any script, use the `--help` flag:
 ```bash
-pip install -r requirements.txt
+python 1a_extract_from_bag.py --help
 ```
 
-`requirements.txt` Content:
+### Method 2: VS Code with Code Runner
 
-```Plaintext
-# Main Machine Learning and Vision Libraries
-ultralytics
-torch
-torchvision
-opencv-python
-numpy
+For convenience during development, scripts can be run directly within the VS Code editor using an extension like Code Runner. When using this method, script parameters are determined by the following priority:
 
-# Data Handling and Utility Libraries
-pyyaml
-tqdm
-Pillow
-scikit-learn
+1.  **Initiation Settings**: You can directly edit the `INIT_...` variables within the "Initiation Settings" section at the top of each script file for a quick change.
+2.  **`_config.yaml`**: If the `INIT_...` variables are left as `None`, the script will automatically load and use the corresponding values from the central `_config.yaml` file.
 
-# Hugging Face for CLIP Model (used in Active Learning)
-transformers
-
-# Matplotlib for plotting (dependency of ultralytics)
-matplotlib
-```
-
-*Note: ROS2-related libraries such as rosbag2_py and cv_bridge should already be part of your ROS2 development environment.*
-
-### 3. Configure the Environment
-
-All scripts reference the `_config.yaml` file in the root directory before execution. Please configure class information, dataset paths, model types, and hyperparameters to match your project environment.
-
-```YAML
-# Example _config.yaml
-
-project_settings:
-  classes:
-    0: 'car'
-    1: 'person'
-  image_format: 'png,jpg'
-
-initial_teacher_workflow:
-  ros2_bag_extraction:
-    directory: '/path/to/your/rosbags'
-    image_topic: '/image_raw'
-    output_dir: 'datasets/phase1_extracted'
-  initial_labeled_dataset: 'datasets/phase1_initial_labeled'
-  train_ratio: 0.8
-  teacher_model_config:
-    model_name: 'yolov10m'
-    # ...
-```
-
-## Detailed Script Usage
-
-Each script can be run from the terminal with command-line arguments. If arguments are omitted, the script will use the default settings from the `_config.yaml` file.
-
-### **Phase 1: Initial Teacher Model Construction**
-
-* **`1a_extract_from_bag.py`**
-    ```bash
-    python 1_Initial_Teacher_Workflow/1a_extract_from_bag.py --bag <bag_dir> --output <output_dir> --mode <1 or 2>
-    ```
-
-* **`1b_manual_labeler.py`**
-    ```bash
-    python 1_Initial_Teacher_Workflow/1b_manual_labeler.py --dataset <dataset_dir> --start_image <image_name.png>
-    ```
-
-* **`1c_split_for_training.py`**
-    ```bash
-    python 1_Initial_Teacher_Workflow/1c_split_for_training.py --dataset <dataset_dir>
-    ```
-
-* **`1d_train_teacher_model.py`**
-    ```bash
-    python 1_Initial_Teacher_Workflow/1d_train_teacher_model.py --dataset <dataset_dir> --epochs 100 --batch 16 --imgsz 640
-    ```
-
-### **Phase 2: Semi-Supervised Cycle**
-
-* **`2a_auto_labeler.py`**
-    ```bash
-    python 2_Semi_Supervised_Cycle/2a_auto_labeler.py --dataset <unlabeled_dir> --weights <teacher_model.pt> --conf 0.25
-    ```
-
-* **`2b_review_and_cleaner.py`**
-    ```bash
-    python 2_Semi_Supervised_Cycle/2b_review_and_cleaner.py --dataset <auto_labeled_dir> --mode remove_noise --output_dir <cleaned_dir>
-    ```
-
-* **`2c_retrain_model.py`**
-    ```bash
-    python 2_Semi_Supervised_Cycle/2c_retrain_model.py --dataset <merged_and_resplit_dir> --epochs 150
-    ```
-
-### **Phase 3: Final Student Model Training**
-
-* **`3a_train_student_model.py`**
-    ```bash
-    python 3_Final_Student_Training/3a_train_student_model.py --dataset <final_dataset_dir>
-    ```
-    *Note: The Student model type is configured in _config.yaml.*
-
-### **Tools**
-
-* **`merge_datasets.py`**
-    ```bash
-    python tools/merge_datasets.py --inputs <dir1> <dir2> --output <merged_dir>
-    ```
-
-* **`sample_dataset.py`**
-    ```bash
-    python tools/sample_dataset.py --source <large_dataset_dir> --output <sample_dir> --ratio 0.1
-    ```
-
-### **Advanced Features**
-
-* **`active_learning_sampler.py`**
-    ```bash
-    python advanced_features/active_learning_sampler.py --source <pool_dir> --weights <model.pt> --workdir <al_workspace> --size 200
-    ```
+This allows for rapid testing and execution without needing to type command-line arguments for each run.

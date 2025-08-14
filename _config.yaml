@@ -1,53 +1,85 @@
 # ==============================================================================
-# End-to-End YOLO Dataset Pipeline - Master Configuration
+# Master Configuration for End-to-End YOLO Pipeline
 #
-# 이 파일은 3단계 워크플로우에 맞춰 재구성된 프로젝트의 마스터 제어판입니다.
-# 각 스크립트는 실행 시 이 파일의 설정을 참조합니다.
+# This file is the master control panel for the project, reorganized by function
+# to centralize related settings. Scripts refer to this file at runtime.
 # ==============================================================================
 
-# ------------------------------------------------------------------------------
-# [전역 설정] 프로젝트 기본 정보 (Global Project Settings)
-#
-# 모든 워크플로우에서 공통으로 사용되는 기본 정보입니다.
-# ------------------------------------------------------------------------------
-project_settings:
-  # 학습할 객체의 클래스 정의. Key: class_id, Value: class_name
+
+# ==============================================================================
+# SECTION 1: DATASET & FILE PATHS
+# All paths related to datasets, workspaces, and other file locations.
+# ==============================================================================
+dataset_paths:
+  # [Script: 1a] The absolute path to the ros2bag folder that needs to be extracted.
+  # This is the primary source of all image data for the entire pipeline.
+  # USER ACTION REQUIRED: This path must be updated to your local environment.
+  ros2bag_directory: '/home/kdh/Desktop/rosbags/kookmin/8월 11일/mission1'
+
+  # [Script: 1a] Default directory where raw images will be saved after extraction from the ros2bag.
+  extracted_images_dir: 'datasets/phase1_extracted'
+
+  # [Scripts: 1b, 1c, 1d, 1e] Path to the initial, manually labeled dataset. This small, high-quality dataset
+  # is used to train the very first Teacher model.
+  initial_labeled_dataset: 'datasets/phase1_extracted'
+
+  # [Scripts: 2a, active_learning_sampler] Path to the large pool of unlabeled images for the semi-supervised cycle.
+  # The teacher model will generate pseudo-labels for this data.
+  unlabeled_pool_dir: 'datasets/phase2_unlabeled_pool'
+
+  # [Scripts: 2b, 1b, 1c] Path to an auto-labeled dataset that requires human review. This dataset is processed
+  # by the cleaner to remove noise or sent to the manual labeler for corrections.
+  reviewed_dataset: 'datasets/phase1_extracted'
+  
+  # [Scripts: 2c, tools/merge] Path to the final, merged dataset created by combining the original
+  # labeled data with the newly reviewed data. Used for retraining the Teacher model.
+  merged_dataset_for_retrain: 'datasets/phase2_merged_for_retrain'
+
+  # [Script: 3a] Path to the large-scale, high-quality dataset completed in Phase 2,
+  # which will be used for training the final lightweight Student model.
+  final_training_dataset: 'datasets/phase1_extracted'
+
+  # [Script: active_learning] Workspace directory for the Active Learning script.
+  # Intermediate files like predictions and feature vectors will be stored here.
+  active_learning_workspace: 'active_learning_workspace'
+
+  # [Script: tools/merge] Default list of input dataset directories for the merge_datasets.py script.
+  merge_tool_inputs:
+    - 'datasets/phase1_initial_labeled'
+    - 'datasets/phase2_reviewed_data'
+
+  # [Script: tools/sample] Default source dataset for the random_sample_dataset.py script.
+  sampling_tool_source: 'datasets/phase2_merged_for_retrain'
+
+  # [Script: tools/sample] Default output directory for the sampled dataset created by random_sample_dataset.py.
+  sampling_tool_output: 'datasets/sample_for_test'
+
+
+# ==============================================================================
+# SECTION 2: MODEL CONFIGURATIONS
+# All settings related to model architecture, weights, and classes.
+# ==============================================================================
+model_configurations:
+  # [Scripts: 1b, 1c, 1d, 2b] Defines the object classes for the model.
+  # The key is the class ID (integer) and the value is the class name (string). This must be consistent across all phases.
   classes:
     0: 'center_line'
     1: 'obstacle_vehicle'
     2: 'race_traffic_light'
     3: 'checkerboard'
 
-  # 프로젝트에서 사용할 이미지 포맷
-  image_format: 'png,jpg,jpeg'
-
-
-# ==============================================================================
-# [Phase 1] 초기 Teacher 모델 구축 워크플로우 설정
-# (1_Initial_Teacher_Workflow)
-# ==============================================================================
-initial_teacher_workflow:
-  # [1a] ROS2 Bag 추출 설정
-  ros2_bag_extraction:
-    # [사용자 수정 필요] 추출할 ros2bag 폴더의 '절대 경로'
-    directory: '/home/kdh/Desktop/rosbags/kookmin/8월 11일/mission1'
-    image_topic: '/image_raw'
-    # 추출된 원본 이미지를 저장할 데이터셋 경로
-    output_dir: 'datasets/phase1_extracted'
-
-  # [1b] 수동 라벨링을 마친 초기 데이터셋 경로
-  # output_dir에서 일부를 라벨링하여 이 폴더로 옮기거나, 이 폴더에서 직접 작업
-  initial_labeled_dataset: 'datasets/phase1_initial_labeled'
-
-  # [1c] 데이터 분할 설정
-  train_ratio: 0.8  # 학습용 데이터 비율 (80%)
-
-  # [1d] Teacher 모델 학습 설정
+  # [Scripts: 1e, 2a, 2c] Configuration for the Teacher model, which is used to generate pseudo-labels.
   teacher_model_config:
-    model_name: 'yolov10m'
+    # [Scripts: 1e, 2c, 2a] The name of the YOLO model architecture to use (e.g., 'yolov8n', 'yolov10m').
+    model_name: 'yolov10s'
+    # [Scripts: 1e, 2c, 3a] Hyperparameters for training the Teacher model.
     hyperparameters:
+      # [Scripts: 1e, 2c, 3a] The total number of epochs for training.
       epochs: 1000
+      # [Scripts: 1e, 2c, 3a] Number of epochs with no improvement after which training will be stopped.
       patience: 100
+      # [Scripts: 1e, 2c, 3a] Model-specific parameters. The script will use 'default' if the specified
+      # model_name is not found in this list.
       models:
         yolov8x:
           batch_size: 8
@@ -65,71 +97,49 @@ initial_teacher_workflow:
           batch_size: 16
           img_size: 640
 
-
-# ==============================================================================
-# [Phase 2] 준지도 학습 사이클 설정
-# (2_Semi_Supervised_Cycle)
-# ==============================================================================
-semi_supervised_cycle:
-  # [2a] 자동 라벨링 대상이 되는, 라벨 없는 대규모 이미지 풀 경로
-  unlabeled_pool_dir: 'datasets/phase2_unlabeled_pool'
-
-  # [2a] 자동 라벨링에 사용할 Teacher 모델 가중치 경로
-  teacher_model_weights: 'runs/train/yolov10m_on_phase1_initial_labeled/weights/best.pt'
-  
-  # [2a] 자동 라벨링 시 사용할 신뢰도 임계값
-  confidence_threshold: 0.3
-  
-  # [2b] 자동 라벨링 후 검토/수정한 데이터를 저장할 경로
-  reviewed_dataset: 'datasets/phase2_reviewed_data'
-  
-  # [2c] 재학습 시, 기존 데이터와 새로 검토한 데이터를 합쳐서 저장할 최종 데이터셋 경로
-  merged_dataset_for_retrain: 'datasets/phase2_merged_for_retrain'
-
-
-# ==============================================================================
-# [Phase 3] 최종 Student 모델 학습 설정
-# (3_Final_Student_Training)
-# ==============================================================================
-final_student_training:
-  # [3a] 최종 학습에 사용할, Phase 2에서 완성된 대규모 데이터셋 경로
-  final_dataset_path: 'datasets/phase2_merged_for_retrain'
-
-  # [3a] 최종적으로 학습시킬 Student 모델 설정
+  # [Script: 3a] Configuration for the final Student model, which is optimized for deployment.
   student_model_config:
-    # Teacher와 다른, 더 가벼운 모델을 지정할 수 있습니다.
-    model_name: 'yolov10s' 
-    # 하이퍼파라미터는 Teacher의 것을 사용하거나, 필요시 별도로 정의할 수 있습니다.
-    # 예: hyperparameters: { epochs: 500, ... }
+    # [Script: 3a] The name of the YOLO architecture for the Student model.
+    # This can be a lighter model than the Teacher for faster inference.
+    model_name: 'yolov10n'
+    # YOLO's "auto" mode automatically selects the hyperparameters.
+  
+  # [Script: 2a] Path to the trained Teacher model weights (.pt file) used for auto-labeling in the semi-supervised cycle.
+  semi_supervised_weights: 'runs/train/yolov10m_result/weights/best.pt'
+  
+  # [Script: active_learning] Path to the trained model weights (.pt file) used for Active Learning predictions.
+  active_learning_weights: 'runs/train/yolov10m_result/weights/best.pt'
 
 
 # ==============================================================================
-# [고급 기능] 액티브 러닝 설정
-# (advanced_features)
+# SECTION 3: WORKFLOW & TOOL PARAMETERS
+# Other parameters that control the behavior of the pipeline scripts.
 # ==============================================================================
-active_learning:
-  # 예측에 사용할 선생님 모델
-  weights_path: 'runs/train/yolov10m_result/weights/best.pt'
-  # 예측 결과, 특징 등 중간 파일이 저장될 작업 공간
-  workspace_dir: 'active_learning_workspace'
-  # 최종적으로 선택할 이미지 개수
-  selection_size: 100
-  # 불확실성 샘플링 신뢰도 구간 (최소, 최대)
-  min_confidence: 0.4
-  max_confidence: 0.8
+workflow_parameters:
+  # [Scripts: 1a, 1b, 1d, 2a, 2b, tools/*] Global setting for image formats used across the project.
+  # Comma-separated list of extensions without the dot.
+  image_format: 'png,jpg,jpeg'
 
+  # [Script: 1a] The ROS topic from which to extract images from the ros2bag file.
+  ros2_image_topic: '/image_raw'
 
-# ==============================================================================
-# [보조 도구] Tools 기본 설정
-# (tools)
-# ==============================================================================
-tool_defaults:
-  # [merge_datasets.py] 기본으로 병합할 데이터셋 목록
-  merge_inputs:
-    - 'datasets/phase1_initial_labeled'
-    - 'datasets/phase2_reviewed_data'
+  # [Script: 1d] The ratio of the dataset to be used for the training set during the split.
+  # The rest will be used for the validation set (e.g., 0.8 means 80% train, 20% val).
+  train_split_ratio: 0.8
 
-  # [sample_dataset.py] 기본 샘플링 설정
-  sampling_source: 'datasets/phase2_merged_for_retrain'
-  sampling_ratio: 0.1
-  sampling_output: 'datasets/sample_for_test'
+  # [Script: 2a] The confidence score threshold for auto-labeling.
+  # Predictions with a confidence score below this value will be discarded.
+  auto_label_confidence_threshold: 0.3
+
+  # [Script: active_learning_sampler] The final number of images to select during the Active Learning process.
+  active_learning_selection_size: 100
+
+  # [Script: active_learning_sampler] The minimum average confidence for an image to be considered 'uncertain'.
+  active_learning_min_confidence: 0.4
+
+  # [Script: active_learning_sampler] The maximum average confidence for an image to be considered 'uncertain'.
+  active_learning_max_confidence: 0.8
+
+  # [Script: tools/random_sample_dataset] The default ratio of the dataset to sample when using random_sample_dataset.py.
+  # (e.g., 0.1 means 10% of the dataset will be sampled).
+  sampling_tool_ratio: 0.1
