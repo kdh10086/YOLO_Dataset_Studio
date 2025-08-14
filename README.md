@@ -19,6 +19,7 @@ ROS2 Bag에서 추출한 이미지로 YOLO 커스텀 데이터셋을 구축하�
 ---
 
 ## 프로젝트 구조
+```
 .
 ├── 1_Initial_Teacher_Workflow/
 │   ├── 1a_extract_from_bag.py
@@ -42,6 +43,7 @@ ROS2 Bag에서 추출한 이미지로 YOLO 커스텀 데이터셋을 구축하�
 ├── _config.yaml
 ├── requirements.txt
 └── README.md
+```
 
 ---
 
