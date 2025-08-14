@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+venv/
+.env
+
+# IDE - Visual Studio Code & JetBrains
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Project-specific generated folders
+# 중요: 이 폴더들은 git으로 관리하지 않을 대용량 데이터,
+# 학습 결과물, 중간 파일들을 저장하는 곳입니다.
+# 작은 샘플 데이터셋을 포함시키고 싶다면 해당 라인을 지우거나 주석 처리하세요.
+datasets/
+runs/
+active_learning_workspace/

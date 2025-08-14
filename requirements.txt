@@ -1,0 +1,18 @@
+# Main Machine Learning and Vision Libraries
+ultralytics
+torch
+torchvision
+opencv-python
+numpy
+
+# Data Handling and Utility Libraries
+pyyaml
+tqdm
+Pillow
+scikit-learn
+
+# Hugging Face for CLIP Model (used in Active Learning)
+transformers
+
+# Matplotlib for plotting (dependency of ultralytics)
+matplotlib
