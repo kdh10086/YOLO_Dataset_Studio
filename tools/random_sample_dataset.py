@@ -25,7 +25,7 @@ def main(config, args):
     새로운 평면 구조의 데이터셋을 생성합니다.
     """
     # 1. 설정값 결정 (3단계 우선순위 적용)
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     defaults = config.get('sampling_defaults', {})
 
     source_dir_relative = args.source if args.source is not None else \
@@ -98,7 +98,7 @@ def main(config, args):
     print(f"  - 총 {len(sampled_files)}개의 파일이 '{output_dir}'에 저장되었습니다.")
 
 if __name__ == '__main__':
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
         with open(os.path.join(project_root, '_config.yaml'), 'r') as f:
             config = yaml.safe_load(f)

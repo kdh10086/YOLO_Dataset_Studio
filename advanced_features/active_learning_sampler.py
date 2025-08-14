@@ -28,7 +28,7 @@ class ActiveLearningSampler:
     불확실성 및 다양성 샘플링을 기반으로 액티브 러닝을 수행하는 클래스.
     """
     def __init__(self, config, args):
-        self.project_root = os.path.dirname(os.path.abspath(__file__))
+        self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self._setup_config(config, args)
         self._setup_directories()
         
@@ -184,7 +184,7 @@ def main(config, args):
     sampler.run()
 
 if __name__ == '__main__':
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
         with open(os.path.join(project_root, '_config.yaml'), 'r') as f:
             config = yaml.safe_load(f)

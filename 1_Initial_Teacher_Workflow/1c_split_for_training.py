@@ -124,7 +124,7 @@ def main(config, args):
     데이터셋 분할 및 data.yaml 생성 작업을 총괄합니다.
     """
     # 1. 설정값 결정 (3단계 우선순위 적용)
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     dataset_dir_relative = args.dataset if args.dataset is not None else \
                            INIT_DATASET_DIR if INIT_DATASET_DIR is not None else \
@@ -155,7 +155,7 @@ def main(config, args):
         print("\n분할 작업에 실패하여 YAML 파일을 생성하지 않았습니다.")
 
 if __name__ == "__main__":
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
         with open(os.path.join(project_root, '_config.yaml'), 'r') as f:
             config = yaml.safe_load(f)

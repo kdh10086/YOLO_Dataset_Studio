@@ -188,7 +188,7 @@ class Visualizer:
 
 def main(config, args):
     """설정값을 결정하고 Visualizer를 실행합니다."""
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     dataset_dir_relative = args.dataset if args.dataset is not None else \
                            INIT_DATASET_DIR if INIT_DATASET_DIR is not None else \
@@ -215,7 +215,7 @@ def main(config, args):
     visualizer.run()
 
 if __name__ == "__main__":
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
         with open(os.path.join(project_root, '_config.yaml'), 'r') as f:
             config = yaml.safe_load(f)

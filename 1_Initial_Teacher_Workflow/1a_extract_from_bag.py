@@ -46,7 +46,7 @@ def extract_frames(config, args):
     """
     # 1. 설정값 결정 (3단계 우선순위 적용)
     # Priority 1: Command-line args > Priority 2: Initiation block > Priority 3: YAML config
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     bag_dir = args.bag if args.bag is not None else \
               INIT_BAG_DIR if INIT_BAG_DIR is not None else \
@@ -177,7 +177,7 @@ def extract_frames(config, args):
     print(f"\n이미지 추출을 종료합니다. 총 {saved_count}개의 이미지를 저장했습니다.")
 
 if __name__ == "__main__":
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
         with open(os.path.join(project_root, '_config.yaml'), 'r') as f:
             config = yaml.safe_load(f)

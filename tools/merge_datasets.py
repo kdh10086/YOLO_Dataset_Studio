@@ -71,7 +71,7 @@ def merge_and_rename(all_image_paths, output_dir):
 
 def main(config, args):
     """스크립트의 메인 실행 로직."""
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     # 1. 설정값 결정 (3단계 우선순위 적용)
     input_dirs_relative = args.inputs if args.inputs is not None else \
@@ -114,7 +114,7 @@ def main(config, args):
     print("\n모든 작업이 성공적으로 완료되었습니다.")
 
 if __name__ == '__main__':
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
         with open(os.path.join(project_root, '_config.yaml'), 'r') as f:
             config = yaml.safe_load(f)

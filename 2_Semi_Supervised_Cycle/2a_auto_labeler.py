@@ -25,7 +25,7 @@ def auto_label_dataset(config, args):
     선생님 모델을 사용하여 데이터셋의 이미지들을 자동으로 라벨링합니다.
     """
     # 1. 설정값 결정 (3단계 우선순위 적용)
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     dataset_dir_relative = args.dataset if args.dataset is not None else \
                            INIT_DATASET_DIR if INIT_DATASET_DIR is not None else \
@@ -116,7 +116,7 @@ def auto_label_dataset(config, args):
     print(f"'{labels_dir}' 폴더에 라벨 파일들이 저장되었습니다.")
 
 if __name__ == "__main__":
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
         with open(os.path.join(project_root, '_config.yaml'), 'r') as f:
             config = yaml.safe_load(f)

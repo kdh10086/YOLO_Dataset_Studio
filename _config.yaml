@@ -30,7 +30,7 @@ initial_teacher_workflow:
   # [1a] ROS2 Bag 추출 설정
   ros2_bag_extraction:
     # [사용자 수정 필요] 추출할 ros2bag 폴더의 '절대 경로'
-    directory: '/home/kdh/Desktop/rosbags/kookmin/8월 11일/장애물차량데이터셋용/undistorted/obstacle6_udtd'
+    directory: '/home/kdh/Desktop/rosbags/kookmin/8월 11일/mission1'
     image_topic: '/image_raw'
     # 추출된 원본 이미지를 저장할 데이터셋 경로
     output_dir: 'datasets/phase1_extracted'

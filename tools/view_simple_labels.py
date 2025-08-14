@@ -21,7 +21,7 @@ def main(config, args):
     분할되지 않은 데이터셋의 라벨을 시각화합니다.
     """
     # 1. 설정값 결정 (3단계 우선순위 적용)
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     dataset_dir_relative = args.dataset if args.dataset is not None else \
                            INIT_DATASET_DIR if INIT_DATASET_DIR is not None else \
@@ -127,7 +127,7 @@ def main(config, args):
 
 
 if __name__ == "__main__":
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
         with open(os.path.join(project_root, '_config.yaml'), 'r') as f:
             config = yaml.safe_load(f)
