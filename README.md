@@ -1,24 +1,22 @@
 # End-to-End YOLO Dataset Pipeline with Semi-Supervised & Teacher-Student Learning
 
-ROS2 Bag에서 추출한 이미지로 YOLO 커스텀 데이터셋을 구축하고, **준지도 학습(Semi-Supervised Learning)** 및 **Teacher-Student** 아키텍처를 통해 데이터셋을 점진적으로 고도화하며 최종 모델을 학습시키는 End-to-End 파이프라인입니다.
+This is an end-to-end pipeline for building a custom YOLO dataset from images extracted from a ROS2 Bag. It progressively refines the dataset through **Semi-Supervised Learning** and a **Teacher-Student** architecture to train a final model.
 
-자율주행 환경에서 수집된 대규모의 비정형 데이터를 최소한의 수동 라벨링으로 효율적으로 가공하고, 모델 스스로 데이터셋을 확장하게 하여 성능을 극대화하는 것을 목표로 합니다.
-
-
+The goal is to efficiently process large-scale, unstructured data collected in autonomous driving environments with minimal manual labeling, enabling the model to expand the dataset on its own and thereby maximize performance.
 
 ---
 
-## 주요 특징
+## Key Features
 
-* **ROS2 연동**: ROS2 Bag에서 이미지 프레임을 직접 추출하여 데이터 수집부터 학습까지의 과정을 통합합니다.
-* **Teacher-Student 구조**: 무거운 Teacher 모델로 고품질의 데이터셋을 구축하고, 최종적으로 가볍거나 다른 아키텍처의 Student 모델을 학습시키는 효율적인 전략을 사용합니다.
-* **준지도 학습 사이클**: 초기에 수동으로 라벨링한 소수의 데이터로 Teacher 모델을 만든 후, 이 모델이 나머지 데이터를 자동으로 라벨링하고, 사용자는 그 결과를 검토/수정하여 점진적으로 데이터셋과 모델 성능을 향상시키는 반복적 워크플로우를 제공합니다.
-* **지능형 데이터 샘플링**: Active Learning을 통해 모델 성능 향상에 가장 도움이 될 만한 데이터를 지능적으로 선별하여 라벨링을 요청할 수 있습니다.
-* **모듈화된 워크플로우**: 전체 파이프라인이 명확한 3단계와 보조 도구들로 구성되어 있어, 프로젝트의 흐름을 쉽게 이해하고 필요한 기능을 선택적으로 사용할 수 있습니다.
+* **ROS2 Integration**: Directly extracts image frames from ROS2 Bags, unifying the process from data collection to model training.
+* **Teacher-Student Architecture**: Employs an efficient strategy where a more complex Teacher model builds a high-quality dataset, which is then used to train a lighter or different architecture Student model.
+* **Semi-Supervised Learning Cycle**: Provides an iterative workflow where a Teacher model, created from a small, manually labeled dataset, automatically labels new data. The user then reviews and corrects these labels to progressively improve both the dataset and the model's performance.
+* **Intelligent Data Sampling**: Through Active Learning, the pipeline can intelligently select the most informative data for labeling to maximize performance gains.
+* **Modular Workflow**: The entire pipeline is organized into three distinct phases and a set of auxiliary tools, making it easy to understand the project flow and selectively execute specific tasks.
 
 ---
 
-## 프로젝트 구조
+## Project Structure
 ```
 .
 ├── 1_Initial_Teacher_Workflow/
@@ -47,58 +45,58 @@ ROS2 Bag에서 추출한 이미지로 YOLO 커스텀 데이터셋을 구축하�
 
 ---
 
-## 전체 워크플로우 가이드
+## Full Workflow Guide
 
-이 파이프라인은 크게 3가지 단계로 진행됩니다.
+This pipeline proceeds in three main phases.
 
-### **Phase 1: 초기 Teacher 모델 구축 (`1_Initial_Teacher_Workflow`)**
+### **Phase 1: Initial Teacher Model Construction (`1_Initial_Teacher_Workflow`)**
 
-모든 과정의 시작점으로, 첫 번째 '선생님 모델'을 만들기 위한 단계입니다.
+This is the starting point for the entire process, dedicated to creating the first "Teacher" model.
 
-1.  **`1a_extract_from_bag.py`**: ROS2 Bag 파일에서 이미지들을 추출합니다.
-2.  **`1b_manual_labeler.py`**: 추출된 이미지 중 **소량의 샘플**에 대해 수동으로 정확하게 라벨링합니다.
-3.  **`1c_split_for_training.py`**: 라벨링된 데이터셋을 `train/val`로 분할하고 학습에 필요한 `data.yaml` 파일을 생성합니다.
-4.  **`1d_train_teacher_model.py`**: 분할된 데이터셋으로 첫 번째 **Teacher 모델**을 학습시킵니다.
+1.  **`1a_extract_from_bag.py`**: Extracts images from a ROS2 Bag file.
+2.  **`1b_manual_labeler.py`**: Manually and accurately label a **small sample** of the extracted images.
+3.  **`1c_split_for_training.py`**: Splits the labeled dataset into `train/val` sets and generates the necessary `data.yaml` file for training.
+4.  **`1d_train_teacher_model.py`**: Trains the first **Teacher model** on the split dataset.
 
-### **Phase 2: 준지도 학습 사이클 (`2_Semi_Supervised_Cycle`)**
+### **Phase 2: Semi-Supervised Cycle (`2_Semi_Supervised_Cycle`)**
 
-1단계에서 만든 Teacher 모델을 이용해 데이터셋을 확장하고 모델 성능을 반복적으로 고도화하는 핵심 사이클입니다.
+This is the core iterative cycle that uses the Teacher model from Phase 1 to expand the dataset and improve performance.
 
-1.  **`2a_auto_labeler.py`**: 1단계에서 학습된 Teacher 모델을 사용하여 아직 라벨링되지 않은 대량의 이미지에 대해 **자동으로 라벨을 생성**합니다.
-2.  **`2b_review_and_cleaner.py`**: 자동 라벨링된 결과물을 시각적으로 확인하며, 잘못된 부분을 **검토하고 수정**합니다. 이 과정을 통해 데이터의 품질을 높입니다.
-3.  **데이터 병합 및 재학습**:
-    * `tools/merge_datasets.py`를 사용하여, 검수가 완료된 새로운 데이터와 기존 데이터를 하나로 합칩니다.
-    * 다시 `1c_split_for_training.py`를 실행하여 확장된 데이터셋을 분할합니다.
-    * `2c_retrain_model.py`를 실행하여 더 많고 정교해진 데이터로 Teacher 모델을 **재학습**시켜 성능을 향상시킵니다.
-4.  **이 과정을 여러 번 반복**하여 대규모의 고품질 데이터셋을 완성합니다.
+1.  **`2a_auto_labeler.py`**: Uses the trained Teacher model to **automatically generate labels** for a large number of unlabeled images.
+2.  **`2b_review_and_cleaner.py`**: Visually **reviews and corrects** the automatically generated labels to ensure data quality.
+3.  **Merge and Retrain**:
+    * Use `tools/merge_datasets.py` to combine the newly reviewed data with the existing dataset.
+    * Run `1c_split_for_training.py` again to re-split the expanded dataset.
+    * Execute `2c_retrain_model.py` to **retrain** the Teacher model with the larger, more refined dataset, thereby improving its performance.
+4.  **Repeat this process** multiple times to build a large-scale, high-quality dataset.
 
-### **Phase 3: 최종 Student 모델 학습 (`3_Final_Student_Training`)**
+### **Phase 3: Final Student Model Training (`3_Final_Student_Training`)**
 
-2단계를 통해 완성된 최종 데이터셋을 사용하여, 우리가 실제로 사용하고자 하는 **Student 모델**을 학습시키는 마지막 단계입니다.
+This is the final stage, where the complete dataset created in Phase 2 is used to train the desired **Student model**.
 
-1.  **`_config.yaml` 수정**: 학습시킬 Student 모델의 종류(예: `yolov10n.pt`)와 최종 데이터셋 경로를 지정합니다.
-2.  **`3a_train_student_model.py`**: 최종 데이터셋으로 Student 모델을 학습시켜, 가벼우면서도 높은 성능을 가진 최종 모델을 얻습니다.
+1.  **Modify `_config.yaml`**: Specify the type of Student model to be trained (e.g., `yolov10n.pt`) and the path to the final dataset.
+2.  **`3a_train_student_model.py`**: Trains the Student model on the final dataset to obtain a lightweight yet high-performance model.
 
 ---
 
-## 설치 및 설정
+## Installation and Setup
 
-### **1. 저장소 복제**
+### **1. Clone the Repository**
 
 ```bash
-git clone [https://github.com/Doooo-Hyeong/Creating-a-YOLO-Custom-Dataset.git](https://github.com/Doooo-Hyeong/Creating-a-YOLO-Custom-Dataset.git)
-cd Creating-a-YOLO-Custom-Dataset
+git clone https://github.com/kdh10086/Creating-a-YOLO-Custom-Dataset-from-a-ros2bag-image_raw-Topic.git
+cd Creating-a-YOLO-Custom-Dataset-from-a-ros2bag-image_raw-Topic
 ```
 
-### 2. 필요 라이브러리 설치
+### 2. Install Dependencies
 
-`requirements.txt` 파일을 이용하여 필요한 모든 라이브러리를 설치합니다.
+Install all required libraries using the `requirements.txt` file
 
 ```bash
 pip install -r requirements.txt
 ```
 
-`requirements.txt` 내용:
+`requirements.txt` Content:
 
 ```Plaintext
 # Main Machine Learning and Vision Libraries
@@ -121,14 +119,14 @@ transformers
 matplotlib
 ```
 
-참고: `rosbag2_py`, `cv_bridge` 등 ROS2 관련 라이브러리는 사용자의 ROS2 개발 환경에 이미 포함되어 있어야 합니다.
+*Note: ROS2-related libraries such as rosbag2_py and cv_bridge should already be part of your ROS2 development environment.*
 
-### 3. 환경 설정
+### 3. Configure the Environment
 
-모든 스크립트는 실행 전 루트 디렉토리의 `_config.yaml` 파일을 참조합니다. 자신의 프로젝트 환경에 맞게 클래스 정보, 데이터셋 경로, 모델 종류, 하이퍼파라미터 등을 먼저 설정해주세요.
+All scripts reference the `_config.yaml` file in the root directory before execution. Please configure class information, dataset paths, model types, and hyperparameters to match your project environment.
 
 ```YAML
-# _config.yaml 예시
+# Example _config.yaml
 
 project_settings:
   classes:
@@ -148,11 +146,11 @@ initial_teacher_workflow:
     # ...
 ```
 
-## 스크립트 상세 사용법
+## Detailed Script Usage
 
-각 스크립트는 터미널에서 인자(argument)를 직접 전달하여 실행할 수 있습니다. 인자를 생략하면 `_config.yaml` 파일의 기본 설정을 따릅니다.
+Each script can be run from the terminal with command-line arguments. If arguments are omitted, the script will use the default settings from the `_config.yaml` file.
 
-### **Phase 1: 초기 Teacher 모델 구축**
+### **Phase 1: Initial Teacher Model Construction**
 
 * **`1a_extract_from_bag.py`**
     ```bash
@@ -174,7 +172,7 @@ initial_teacher_workflow:
     python 1_Initial_Teacher_Workflow/1d_train_teacher_model.py --dataset <dataset_dir> --epochs 100 --batch 16 --imgsz 640
     ```
 
-### **Phase 2: 준지도 학습 사이클**
+### **Phase 2: Semi-Supervised Cycle**
 
 * **`2a_auto_labeler.py`**
     ```bash
@@ -191,15 +189,15 @@ initial_teacher_workflow:
     python 2_Semi_Supervised_Cycle/2c_retrain_model.py --dataset <merged_and_resplit_dir> --epochs 150
     ```
 
-### **Phase 3: 최종 Student 모델 학습**
+### **Phase 3: Final Student Model Training**
 
 * **`3a_train_student_model.py`**
     ```bash
     python 3_Final_Student_Training/3a_train_student_model.py --dataset <final_dataset_dir>
     ```
-    *참고: Student 모델 종류는 `_config.yaml`에서 수정합니다.*
+    *Note: The Student model type is configured in _config.yaml.*
 
-### **Tools (보조 도구)**
+### **Tools**
 
 * **`merge_datasets.py`**
     ```bash
@@ -211,7 +209,7 @@ initial_teacher_workflow:
     python tools/sample_dataset.py --source <large_dataset_dir> --output <sample_dir> --ratio 0.1
     ```
 
-### **Advanced Features (고급 기능)**
+### **Advanced Features**
 
 * **`active_learning_sampler.py`**
     ```bash
