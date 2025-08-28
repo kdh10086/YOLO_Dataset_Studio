@@ -75,7 +75,7 @@ if __name__ == "__main__":
     except FileNotFoundError: print("Error: _config.yaml not found."); exit()
     parser = argparse.ArgumentParser(description="Automatically labels an image dataset using a teacher model.")
     parser.add_argument('--dataset', type=str, default=None, help="Relative path to the dataset to be auto-labeled.")
-    parser.add_unlabeled_pool_dir('--weights', type=str, default=None, help="Relative path to the teacher model weights (.pt) file.")
+    parser.add_argument('--weights', type=str, default=None, help="Relative path to the teacher model weights (.pt) file.")
     parser.add_argument('--conf', type=float, default=None, help="Confidence threshold for object detection.")
     parser.add_argument('--batch', type=int, default=None, help="Batch size for inference.")
     args = parser.parse_args()

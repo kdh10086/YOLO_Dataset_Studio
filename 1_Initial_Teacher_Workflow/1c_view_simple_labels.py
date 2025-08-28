@@ -26,7 +26,7 @@ class DatasetVisualizer:
         self.colors = {c: ((c*55+50)%256, (c*95+100)%256, (c*135+150)%256) for c in self.classes_dict.keys()}
         
         # Initialize review file list
-        self.review_file_path = os.path.join(self.dataset_dir, "review.txt")
+        self.review_file_path = os.path.join(self.dataset_dir, "review_list.txt")
         self.review_files = set()
         self._load_review_files()
 

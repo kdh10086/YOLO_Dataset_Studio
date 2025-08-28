@@ -27,7 +27,7 @@ INIT_OUTPUT_DIR = None
 # This is used if the '--mode' command-line argument is not provided.
 # Mode 1: Single Frame Save. Click to save the currently displayed frame.
 # Mode 2: Frame Range Save. Click to start/stop saving a sequence of frames.
-INIT_MODE = None
+INIT_MODE = 2
 # ==============================================================================
 
 def get_topic_type(bag_dir, topic_name):
