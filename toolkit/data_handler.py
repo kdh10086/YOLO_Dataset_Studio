@@ -207,12 +207,43 @@ def merge_datasets(input_dirs, output_dir, image_formats, exist_ok=False):
             shutil.copy2(img_path, os.path.join(out_img, new_base+ext)); shutil.copy2(lbl_path, os.path.join(out_lbl, new_base+'.txt')); c+=1
     print(f"Merge complete. {c} pairs saved."); return True
 
-def sample_dataset(source_dir, output_dir, sample_ratio, image_formats, exist_ok=False):
-    if os.path.exists(output_dir) and not exist_ok: print(f"[Error] Output dir exists: {output_dir}"); return False
-    if os.path.exists(output_dir): shutil.rmtree(output_dir)
-    out_img = os.path.join(output_dir,'images'); out_lbl = os.path.join(output_dir,'labels'); os.makedirs(out_img); os.makedirs(out_lbl)
-    all_images = [p for fmt in image_formats for p in glob.glob(os.path.join(source_dir,'**',f'*.{fmt}'),recursive=True)]
+def sample_dataset(source_dir, output_dir, sample_ratio, image_formats, exist_ok=False, method='random'):
+    if os.path.exists(output_dir) and not exist_ok:
+        print(f"[Error] Output dir exists: {output_dir}")
+        return False
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    
+    out_img = os.path.join(output_dir, 'images')
+    out_lbl = os.path.join(output_dir, 'labels')
+    os.makedirs(out_img)
+    os.makedirs(out_lbl)
+
+    all_images = [p for fmt in image_formats for p in glob.glob(os.path.join(source_dir, '**', f'*.{fmt}'), recursive=True)]
     pairs = [{'image': p, 'label': get_label_path(p)} for p in all_images if os.path.exists(get_label_path(p))]
-    random.shuffle(pairs); sampled = pairs[:int(len(pairs)*sample_ratio)]
-    for pair in tqdm(sampled, desc="Sampling"): shutil.copy2(pair['image'], out_img); shutil.copy2(pair['label'], out_lbl)
-    print(f"Sampling complete. {len(sampled)} pairs saved."); return True
+    
+    if not pairs:
+        print("[Warning] No valid image-label pairs found to sample.")
+        return False
+
+    random.shuffle(pairs)
+    
+    num_to_sample = int(len(pairs) * sample_ratio)
+    if num_to_sample == 0:
+        print("[Warning] Sample ratio is too low, 0 files would be sampled. Aborting.")
+        return False
+
+    if method == 'uniform':
+        print(f"Using uniform sampling to select ~{num_to_sample} files.")
+        step = max(1, len(pairs) // num_to_sample)
+        sampled = pairs[::step]
+    else: # 'random'
+        print(f"Using random sampling to select {num_to_sample} files.")
+        sampled = pairs[:num_to_sample]
+
+    for pair in tqdm(sampled, desc="Sampling"):
+        shutil.copy2(pair['image'], out_img)
+        shutil.copy2(pair['label'], out_lbl)
+        
+    print(f"Sampling complete. {len(sampled)} pairs saved to '{output_dir}'.")
+    return True

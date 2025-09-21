@@ -68,10 +68,10 @@ def train_yolo_model(dataset_path, model_config_name, role, run_name, global_con
 
     Args:
         dataset_path (str): Absolute path to the dataset directory (containing data.yaml).
-        model_config_name (str): The key for the model config in _config.yaml.
+        model_config_name (str): The key for the model config in models_config.yaml.
         role (str): The role of the model, e.g., 'teacher' or 'student'.
         run_name (str): The dynamic name for the training run.
-        global_config (dict): The loaded _config.yaml file.
+        global_config (dict): The loaded models_config.yaml file.
         exist_ok (bool): If True, overwrites existing training results.
     """
     global stop_training_flag
@@ -93,7 +93,7 @@ def train_yolo_model(dataset_path, model_config_name, role, run_name, global_con
         batch_size = model_specific_params['batch_size']
         img_size = model_specific_params['img_size']
     except KeyError as e:
-        print(f"[Error] Configuration key missing in _config.yaml: {e}")
+        print(f"[Error] Configuration key missing in models_config.yaml: {e}")
         return
 
     print("\n" + "="*50)

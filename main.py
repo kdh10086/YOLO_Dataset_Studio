@@ -213,14 +213,31 @@ def run_extract_from_bag():
     workflow_params = config.get('workflow_parameters', {})
     topic = workflow_params.get('ros2_image_topic')
     fmts = workflow_params.get('image_format', 'png,jpg,jpeg').split(',')
-    if not topic: print("\n[Error] 'ros2_image_topic' not defined in _config.yaml."); return
+    if not topic: print("\n[Error] 'ros2_image_topic' not defined in models_config.yaml."); return
 
     data_handler.extract_images_from_rosbag(rosbag_dir, output_dir, topic, fmts, mode)
 
 def run_labeling_tool():
     print("\n--- Launch Integrated Labeling Tool ---")
     print("A GUI tool for creating and reviewing bounding box labels.")
-    print("Key-bindings: 1-9 to change class, W/E for Draw/Delete mode, A/D for prev/next image.")
+    
+    # Display class information and key-bindings
+    classes = config.get('model_configurations', {}).get('classes', {})
+    if not classes:
+        print("\n[Warning] No classes defined in models_config.yaml.")
+    else:
+        print("\n--- Class & Key-bindings ---")
+        # Replicate color generation from labeler for display consistency
+        colors = {c: ((c*55+50)%256, (c*95+100)%256, (c*135+150)%256) for c in classes.keys()}
+        print(f"{'Key':<5} {'Name':<25} {'Color (BGR)'}")
+        print("-"*50)
+        for class_id, name in classes.items():
+            key = class_id + 1
+            if 1 <= key <= 9:
+                print(f"{key:<5} {name:<25} {colors.get(class_id)}")
+        print("-"*50)
+
+    print("Other Keys: (W) Draw | (E) Delete | (A) Prev | (D) Next | (F) Flag for Review | (Q) Quit")
     print_cancel_message()
 
     dataset_dir = get_dataset_from_user("Select a dataset to label/review")
@@ -243,7 +260,7 @@ def run_split_dataset():
     classes = model_configs.get('classes')
     fmts = workflow_params.get('image_format', 'png,jpg,jpeg').split(',')
 
-    if not all([ratio, classes]): print("\n[Error] Missing 'train_split_ratio' or 'classes' in _config.yaml."); return
+    if not all([ratio, classes]): print("\n[Error] Missing 'train_split_ratio' or 'classes' in models_config.yaml."); return
     data_handler.split_dataset_for_training(dataset_dir, ratio, classes, fmts)
 
 def run_unified_training():
@@ -350,24 +367,28 @@ def run_random_sampler():
     try:
         ratio = float(ratio_str)
     except ValueError: print("[Error] Invalid ratio."); return
+
+    method_choice = get_input("Select sampling method [1] Random, [2] Uniform (distributed)", default='1')
+    if method_choice == 'c': return
+    method = 'uniform' if method_choice == '2' else 'random'
     
     exist_ok_str = get_input(f"If '{output_dir}' exists, overwrite? (y/N)", default='n')
     if exist_ok_str == 'c': return
     exist_ok = exist_ok_str.lower() == 'y'
 
     fmts = config.get('workflow_parameters', {}).get('image_format', 'png,jpg,jpeg').split(',')
-    data_handler.sample_dataset(source_dir, output_dir, ratio, fmts, exist_ok)
+    data_handler.sample_dataset(source_dir, output_dir, ratio, fmts, exist_ok, method)
 
 def main():
     global config
     check_environment()
 
     try:
-        with open('_config.yaml', 'r') as f: config = yaml.safe_load(f)
+        with open('models_config.yaml', 'r') as f: config = yaml.safe_load(f)
     except FileNotFoundError:
-        print("[WARNING] _config.yaml not found. Using default model settings.")
+        print("[WARNING] models_config.yaml not found. Using default model settings.")
         config = {}
-    except yaml.YAMLError as e: print(f"[Error] Failed to parse _config.yaml: {e}"); sys.exit(1)
+    except yaml.YAMLError as e: print(f"[Error] Failed to parse models_config.yaml: {e}"); sys.exit(1)
 
     actions = {
         '1': run_extract_from_bag, '2': run_labeling_tool, '3': run_split_dataset,
