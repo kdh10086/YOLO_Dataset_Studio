@@ -53,7 +53,9 @@ def get_input(prompt, default=None):
     else:
         full_prompt = f"{prompt}: "
     
-    user_input = input(full_prompt).strip()
+    raw_user_input = input(full_prompt)
+    user_input = raw_user_input.strip()
+
     if user_input.lower() == 'c':
         return 'c'
     
@@ -176,9 +178,9 @@ def add_dataset_directory():
     path_str = get_input("Enter the absolute path to the dataset directory")
     if path_str == 'c' or not path_str: return
 
-    path_str = path_str.strip(''"") # 작은따옴표와 큰따옴표 제거
-
+    path_str = path_str.replace('\'', '').replace('\"', '')
     path = Path(path_str)
+
     if path.is_dir():
         abs_path = str(path.resolve())
         if abs_path not in registered_datasets:
