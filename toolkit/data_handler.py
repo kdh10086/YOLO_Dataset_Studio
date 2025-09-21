@@ -3,10 +3,12 @@ import os
 import glob
 import shutil
 import random
+from pathlib import Path
 import yaml
 import time
 import sys
 from tqdm import tqdm
+import numpy as np
 
 from toolkit.utils import get_label_path
 
@@ -207,43 +209,54 @@ def merge_datasets(input_dirs, output_dir, image_formats, exist_ok=False):
             shutil.copy2(img_path, os.path.join(out_img, new_base+ext)); shutil.copy2(lbl_path, os.path.join(out_lbl, new_base+'.txt')); c+=1
     print(f"Merge complete. {c} pairs saved."); return True
 
+def get_all_image_data(source_dir, image_formats):
+    source_dir = Path(source_dir)
+    image_paths = []
+    for fmt in image_formats:
+        image_paths.extend(sorted(source_dir.glob(str(Path('images') / '**' / f'*.{fmt}'))))
+
+    if not image_paths:
+        return []
+
+    all_image_data = []
+    for img_path in image_paths:
+        label_path = (source_dir / Path('labels') / img_path.relative_to(source_dir / Path('images'))).with_suffix('.txt')
+        if label_path.exists():
+            all_image_data.append((img_path, label_path))
+        else:
+            all_image_data.append((img_path, None))
+    return all_image_data
+
 def sample_dataset(source_dir, output_dir, sample_ratio, image_formats, exist_ok=False, method='random'):
-    if os.path.exists(output_dir) and not exist_ok:
-        print(f"[Error] Output dir exists: {output_dir}")
-        return False
-    if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
-    
-    out_img = os.path.join(output_dir, 'images')
-    out_lbl = os.path.join(output_dir, 'labels')
-    os.makedirs(out_img)
-    os.makedirs(out_lbl)
+    all_image_data = get_all_image_data(source_dir, image_formats)
 
-    all_images = [p for fmt in image_formats for p in glob.glob(os.path.join(source_dir, '**', f'*.{fmt}'), recursive=True)]
-    pairs = [{'image': p, 'label': get_label_path(p)} for p in all_images if os.path.exists(get_label_path(p))]
-    
-    if not pairs:
-        print("[Warning] No valid image-label pairs found to sample.")
-        return False
+    if not all_image_data:
+        print(f"[Error] No images found in {source_dir / 'images'}.")
+        return
 
-    random.shuffle(pairs)
-    
-    num_to_sample = int(len(pairs) * sample_ratio)
-    if num_to_sample == 0:
-        print("[Warning] Sample ratio is too low, 0 files would be sampled. Aborting.")
-        return False
+    num_samples = max(1, int(len(all_image_data) * sample_ratio))
+    print(f"Sampling {num_samples} items ({sample_ratio*100:.1f}% of {len(all_image_data)} total images).")
 
-    if method == 'uniform':
-        print(f"Using uniform sampling to select ~{num_to_sample} files.")
-        step = max(1, len(pairs) // num_to_sample)
-        sampled = pairs[::step]
-    else: # 'random'
-        print(f"Using random sampling to select {num_to_sample} files.")
-        sampled = pairs[:num_to_sample]
+    sampled_data = []
+    if method == 'random':
+        sampled_data = random.sample(all_image_data, num_samples)
+    elif method == 'uniform':
+        indices = np.linspace(0, len(all_image_data) - 1, num_samples).astype(int)
+        sampled_data = [all_image_data[i] for i in indices]
+    else:
+        print(f"[Error] Unknown sampling method: {method}")
+        return
 
-    for pair in tqdm(sampled, desc="Sampling"):
-        shutil.copy2(pair['image'], out_img)
-        shutil.copy2(pair['label'], out_lbl)
-        
-    print(f"Sampling complete. {len(sampled)} pairs saved to '{output_dir}'.")
-    return True
+    # Copy sampled images and their labels (if they exist)
+    for img_path, label_path in tqdm(sampled_data, desc="Copying sampled data"):
+        # Ensure output_dir is a Path object within the loop
+        current_output_dir = Path(output_dir)
+        relative_img_path = img_path.relative_to(source_dir / Path('images'))
+        output_img_path = current_output_dir / Path('images') / relative_img_path
+        output_img_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(img_path), str(output_img_path))
+
+        if label_path: # Only copy label if it exists
+            output_label_path = current_output_dir / Path('labels') / relative_img_path.with_suffix('.txt')
+            output_label_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(label_path), str(output_label_path))

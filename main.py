@@ -88,7 +88,7 @@ def display_main_ui():
         },
         "--- Utilities ---": {
             "6": "Merge Datasets",
-            "7": "Random Sample from Dataset",
+            "7": "Sample from Dataset",
             "8": "Add New Dataset Directory",
         },
         "--- Exit ---": {
@@ -175,6 +175,8 @@ def add_dataset_directory():
     
     path_str = get_input("Enter the absolute path to the dataset directory")
     if path_str == 'c' or not path_str: return
+
+    path_str = path_str.strip(''"") # 작은따옴표와 큰따옴표 제거
 
     path = Path(path_str)
     if path.is_dir():
@@ -352,8 +354,8 @@ def run_merge_datasets():
     data_handler.merge_datasets(input_dirs, output_dir, fmts, exist_ok)
 
 def run_random_sampler():
-    print("\n--- Random Sample from Dataset ---")
-    print("Creates a new, smaller dataset by randomly sampling from a source dataset.")
+    print("\n--- Sample from Dataset ---")
+    print("Creates a new, smaller dataset by sampling from a source dataset (randomly or uniformly).")
     print_cancel_message()
 
     source_dir = get_dataset_from_user("Select a source dataset")
@@ -361,12 +363,33 @@ def run_random_sampler():
     
     output_dir = get_input("Enter path for the new sampled dataset")
     if output_dir == 'c' or not output_dir: return
+
+    fmts = config.get('workflow_parameters', {}).get('image_format', 'png,jpg,jpeg').split(',')
     
-    ratio_str = get_input("Enter sampling ratio (e.g., 0.1)")
-    if ratio_str == 'c': return
+    # Get total image count
+    all_image_data = data_handler.get_all_image_data(source_dir, fmts)
+    total_images = len(all_image_data)
+
+    if total_images == 0:
+        print(f"[Error] No images found in the selected dataset: {source_dir}")
+        return
+
+    print(f"\nTotal images in dataset: {total_images}")
+    
+    desired_samples_str = get_input(f"Enter desired number of samples (1-{total_images})")
+    if desired_samples_str == 'c': return
+    
     try:
-        ratio = float(ratio_str)
-    except ValueError: print("[Error] Invalid ratio."); return
+        desired_samples = int(desired_samples_str)
+        if not (1 <= desired_samples <= total_images):
+            print(f"[Error] Desired samples must be between 1 and {total_images}.")
+            return
+    except ValueError:
+        print("[Error] Invalid number of samples.")
+        return
+    
+    ratio = desired_samples / total_images
+    print(f"Calculated sampling ratio: {ratio:.4f}")
 
     method_choice = get_input("Select sampling method [1] Random, [2] Uniform (distributed)", default='1')
     if method_choice == 'c': return
@@ -376,7 +399,6 @@ def run_random_sampler():
     if exist_ok_str == 'c': return
     exist_ok = exist_ok_str.lower() == 'y'
 
-    fmts = config.get('workflow_parameters', {}).get('image_format', 'png,jpg,jpeg').split(',')
     data_handler.sample_dataset(source_dir, output_dir, ratio, fmts, exist_ok, method)
 
 def main():
