@@ -43,23 +43,38 @@ class ActiveLearningSampler:
     """
     Performs active learning based on uncertainty and diversity sampling.
     """
-    def __init__(self, config, args):
+    def __init__(self, args):
         self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self._setup_config(config, args)
+        self._setup_config(args)
         self._setup_directories()
         self.device = "cuda" if torch.cuda.is_available() else "cpu"; print(f"Device: {self.device.upper()}")
         self.yolo_model = YOLO(self.weights_path)
         self.feature_model = CLIPModel.from_pretrained('openai/clip-vit-base-patch32').to(self.device)
         self.processor = CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32')
 
-    def _setup_config(self, config, args):
-        self.source_dir = os.path.join(self.project_root, args.source or INIT_SOURCE_DIR or config['dataset_paths']['unlabeled_pool_dir'])
-        self.weights_path = os.path.join(self.project_root, args.weights or INIT_WEIGHTS_PATH or config['model_configurations']['active_learning_weights'])
-        self.work_dir = os.path.join(self.project_root, args.workdir or INIT_WORK_DIR or config['dataset_paths']['active_learning_workspace'])
-        self.selection_size = args.size or INIT_SELECTION_SIZE or config['workflow_parameters']['active_learning_selection_size']
-        self.min_conf = args.min_conf or INIT_MIN_CONF or config['workflow_parameters']['active_learning_min_confidence']
-        self.max_conf = args.max_conf or INIT_MAX_CONF or config['workflow_parameters']['active_learning_max_confidence']
-        self.exist_ok = args.exist_ok or (INIT_EXIST_OK is True)
+    def _setup_config(self, args):
+        # Paths are now CLI arguments or prompted at runtime
+        source_rel = args.source or input("Enter relative path to the source dataset with the image pool: ").strip()
+        weights_rel = args.weights or input("Enter relative path to the teacher model weights (.pt): ").strip()
+        workdir_rel = args.workdir or input("Enter relative path to the workspace directory: ").strip()
+
+        self.source_dir = os.path.join(self.project_root, source_rel)
+        self.weights_path = os.path.join(self.project_root, weights_rel)
+        self.work_dir = os.path.join(self.project_root, workdir_rel)
+        
+        # Non-path parameters can still have defaults or be passed via CLI
+        self.selection_size = args.size or 100
+        self.min_conf = args.min_conf or 0.4
+        self.max_conf = args.max_conf or 0.8
+        self.exist_ok = args.exist_ok or False
+
+        print("--- Active Learning Sampler Configuration ---")
+        print(f"  - Source: {self.source_dir}")
+        print(f"  - Weights: {self.weights_path}")
+        print(f"  - Workspace: {self.work_dir}")
+        print(f"  - Selection Size: {self.selection_size}")
+        print(f"  - Confidence Range: [{self.min_conf}, {self.max_conf}]")
+        print("-------------------------------------------")
 
     def _setup_directories(self):
         self.predict_dir = os.path.join(self.work_dir, 'predictions')
@@ -139,7 +154,16 @@ class ActiveLearningSampler:
         print(f"\n--- [Step 5/5] Copying Final Selected Files ---")
         img_paths = glob.glob(os.path.join(self.source_dir, '**', '*.*'), recursive=True)
         path_map = {os.path.splitext(os.path.basename(p))[0]: p for p in img_paths if p.lower().endswith(('.png', '.jpg', '.jpeg'))}
-        copied_count = sum(1 for name in tqdm(basenames, desc="Copying selected files") if name in path_map and (shutil.copy2(path_map[name], self.selection_dir) is None))
+        
+        copied_count = 0
+        for name in tqdm(basenames, desc="Copying selected files"):
+            if name in path_map:
+                try:
+                    shutil.copy2(path_map[name], self.selection_dir)
+                    copied_count += 1
+                except Exception as e:
+                    print(f"Warning: Could not copy file for '{name}': {e}")
+
         print(f"Successfully copied {copied_count} files to the '{self.selection_dir}' folder.")
 
     def run(self):
@@ -151,14 +175,10 @@ class ActiveLearningSampler:
             self._copy_selected_files(final_selections)
         print("\nAll tasks completed.")
 
-def main(config, args):
-    ActiveLearningSampler(config, args).run()
+def main(args):
+    ActiveLearningSampler(args).run()
 
 if __name__ == '__main__':
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    try:
-        with open(os.path.join(project_root, '_config.yaml'), 'r') as f: config = yaml.safe_load(f)
-    except FileNotFoundError: print("Error: _config.yaml not found."); exit()
     parser = argparse.ArgumentParser(description="Intelligently samples images for labeling using active learning.")
     parser.add_argument('--source', type=str, default=None, help="Relative path to the source dataset with the image pool.")
     parser.add_argument('--weights', type=str, default=None, help="Relative path to the teacher model (.pt) to be used for predictions.")
@@ -168,4 +188,4 @@ if __name__ == '__main__':
     parser.add_argument('--max_conf', type=float, default=None, help="Maximum confidence for uncertainty sampling.")
     parser.add_argument('--exist_ok', action='store_true', help="If set, overwrites the existing prediction directory.")
     args = parser.parse_args()
-    main(config, args)
+    main(args)
