@@ -138,15 +138,17 @@ def extract_images_from_rosbag(rosbag_dir, output_dir, image_topic, image_format
 # DATASET MANIPULATION
 # ==============================================================================
 
-def split_dataset_for_training(dataset_dir, train_ratio, class_names, image_formats):
+def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
+    """Splits a dataset into multiple subsets based on given ratios."""
     images_dir = os.path.join(dataset_dir, 'images')
     labels_dir = os.path.join(dataset_dir, 'labels')
     if not os.path.isdir(images_dir) or not os.path.isdir(labels_dir):
-        print(f"[Error] 'images' or 'labels' directory not found in '{dataset_dir}'.")
+        print(f"[Error] 'images' or 'labels' directory not found in '{dataset_dir}'. The directory must contain 'images' and 'labels' subdirectories with the raw data.")
         return False
 
-    # Create train/val subdirectories
-    for sub in ['train', 'val']:
+    # Create train/val/test subdirectories
+    subsets = list(ratios.keys())
+    for sub in subsets:
         os.makedirs(os.path.join(images_dir, sub), exist_ok=True)
         os.makedirs(os.path.join(labels_dir, sub), exist_ok=True)
 
@@ -159,61 +161,155 @@ def split_dataset_for_training(dataset_dir, train_ratio, class_names, image_form
         return False
 
     random.shuffle(valid_pairs)
-    split_point = int(len(valid_pairs) * train_ratio)
-    train_files = valid_pairs[:split_point]
-    val_files = valid_pairs[split_point:]
 
-    # Move files in a clear, atomic way
+    # Normalize ratios
+    total_ratio = sum(ratios.values())
+    if total_ratio <= 0:
+        print("[Error] Sum of ratios must be positive.")
+        return False
+    
+    normalized_ratios = {k: v / total_ratio for k, v in ratios.items()}
+
+    # Move files
     def move_pair(file_path, subset):
         try:
-            # Move image
             shutil.move(file_path, os.path.join(images_dir, subset, os.path.basename(file_path)))
-            # Move label
             label_path = get_label_path(file_path)
             shutil.move(label_path, os.path.join(labels_dir, subset, os.path.basename(label_path)))
         except FileNotFoundError:
             print(f"[Warning] Could not find image or label for: {os.path.basename(file_path)}")
 
-    print(f"Moving {len(train_files)} pairs to 'train'...")
-    for p in tqdm(train_files, desc="Moving train files"):
-        move_pair(p, 'train')
-
-    print(f"Moving {len(val_files)} pairs to 'val'...")
-    for p in tqdm(val_files, desc="Moving val files"):
-        move_pair(p, 'val')
+    start_index = 0
+    for subset, ratio in normalized_ratios.items():
+        end_index = start_index + int(len(valid_pairs) * ratio)
+        files_to_move = valid_pairs[start_index:end_index]
+        
+        print(f"Moving {len(files_to_move)} pairs to '{subset}'...")
+        for p in tqdm(files_to_move, desc=f"Moving {subset} files"):
+            move_pair(p, subset)
+        start_index = end_index
 
     # Create data.yaml
     yaml_path = os.path.join(dataset_dir, 'data.yaml')
     yaml_content = {
         'path': os.path.abspath(dataset_dir),
-        'train': 'images/train',
-        'val': 'images/val',
         'names': [n for _, n in sorted(class_names.items())]
     }
+    # Add dynamic paths for train, val, test, etc.
+    for sub in subsets:
+        yaml_content[sub] = os.path.join('images', sub)
+
     with open(yaml_path, 'w') as f:
         yaml.dump(yaml_content, f, sort_keys=False)
 
     print("Dataset split complete.")
     return True
 
-def merge_datasets(input_dirs, output_dir, image_formats, exist_ok=False):
-    if os.path.exists(output_dir) and not exist_ok: print(f"[Error] Output dir exists: {output_dir}"); return False
-    if os.path.exists(output_dir): shutil.rmtree(output_dir)
-    out_img = os.path.join(output_dir,'images'); out_lbl = os.path.join(output_dir,'labels'); os.makedirs(out_img); os.makedirs(out_lbl)
-    all_images = [p for d in input_dirs for fmt in image_formats for p in glob.glob(os.path.join(d,'**',f'*.{fmt}'),recursive=True)]
-    c=0
-    for img_path in tqdm(all_images, desc="Merging"):
-        lbl_path = get_label_path(img_path)
-        if os.path.exists(lbl_path):
-            ext=os.path.splitext(img_path)[1]; new_base=f"{c:06d}"
-            shutil.copy2(img_path, os.path.join(out_img, new_base+ext)); shutil.copy2(lbl_path, os.path.join(out_lbl, new_base+'.txt')); c+=1
-    print(f"Merge complete. {c} pairs saved."); return True
+def merge_datasets(input_dirs, output_dir, image_formats, exist_ok=False, strategy='flatten', base_dataset=None):
+    """Merges multiple datasets using either a 'flatten' or 'structured' strategy."""
+    if os.path.exists(output_dir) and not exist_ok:
+        print(f"[Error] Output directory already exists: {output_dir}")
+        return False
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    os.makedirs(output_dir)
+
+    # --- Strategy 1: Flatten Merge ---
+    if strategy == 'flatten':
+        print("\nRunning Flatten Merge...")
+        out_img = os.path.join(output_dir, 'images')
+        out_lbl = os.path.join(output_dir, 'labels')
+        os.makedirs(out_img); os.makedirs(out_lbl)
+        
+        all_images = [p for d in input_dirs for fmt in image_formats for p in glob.glob(os.path.join(d, '**', f'*.{fmt}'), recursive=True)]
+        all_images.sort() # Sort images for consistent order
+        
+        c = 0
+        for img_path in tqdm(all_images, desc="Merging and flattening"):
+            lbl_path = get_label_path(img_path)
+            if os.path.exists(lbl_path):
+                ext = os.path.splitext(img_path)[1]
+                new_base = f"{c:06d}"
+                shutil.copy2(img_path, os.path.join(out_img, new_base + ext))
+                shutil.copy2(lbl_path, os.path.join(out_lbl, new_base + '.txt'))
+                c += 1
+        print(f"\nFlatten merge complete. {c} image-label pairs saved.")
+        return True
+
+    # --- Strategy 2: Structured Merge ---
+    elif strategy == 'structured':
+        if not base_dataset or base_dataset not in input_dirs:
+            print("[Error] A valid base dataset must be selected for structured merge.")
+            return False
+        
+        print(f"\nRunning Structured Merge based on '{os.path.basename(base_dataset)}'...")
+        
+        # 1. Determine the structure from the base dataset
+        base_path = Path(base_dataset)
+        base_images = [p for fmt in image_formats for p in base_path.glob(f'**/*.{fmt}')]
+        # Get parent directories relative to the base path (e.g., 'images/train')
+        rel_img_subdirs = sorted(list(set([p.relative_to(base_path).parent for p in base_images])))
+
+        if not rel_img_subdirs:
+            print(f"[Error] No image subdirectories found in the base dataset: {base_dataset}")
+            return False
+
+        print(f"Base structure detected: {[str(p) for p in rel_img_subdirs]}")
+
+        total_saved_pairs = 0
+        # 2. Iterate through each identified subdirectory
+        for rel_img_subdir in rel_img_subdirs:
+            # Create corresponding output directories
+            out_img_subdir = Path(output_dir) / rel_img_subdir
+            # Assume label dir is parallel to image dir (e.g., images/train -> labels/train)
+            rel_lbl_subdir = Path(str(rel_img_subdir).replace('images', 'labels', 1))
+            out_lbl_subdir = Path(output_dir) / rel_lbl_subdir
+            out_img_subdir.mkdir(parents=True, exist_ok=True)
+            out_lbl_subdir.mkdir(parents=True, exist_ok=True)
+
+            file_counter = 0
+            # 3. Iterate through all datasets (including base) and merge into the structure
+            for source_dir in input_dirs:
+                current_scan_dir = Path(source_dir) / rel_img_subdir
+                if not current_scan_dir.is_dir():
+                    print(f"[Warning] Directory '{current_scan_dir}' not found in '{os.path.basename(source_dir)}'. Skipping.")
+                    continue
+
+                # Find all images in the current subdirectory
+                images_in_subdir = [p for fmt in image_formats for p in current_scan_dir.glob(f'*.{fmt}')]
+                images_in_subdir.sort()
+
+                for img_path in images_in_subdir:
+                    lbl_path = get_label_path(str(img_path))
+                    if os.path.exists(lbl_path):
+                        ext = img_path.suffix
+                        new_base = f"{file_counter:06d}"
+                        shutil.copy2(str(img_path), out_img_subdir / (new_base + ext))
+                        shutil.copy2(lbl_path, out_lbl_subdir / (new_base + '.txt'))
+                        file_counter += 1
+            
+            print(f" - Merged {file_counter} pairs into '{rel_img_subdir}'")
+            total_saved_pairs += file_counter
+
+        print(f"\nStructured merge complete. {total_saved_pairs} total image-label pairs saved.")
+        return True
+    
+    else:
+        print(f"[Error] Unknown merge strategy: '{strategy}'")
+        return False
 
 def get_all_image_data(source_dir, image_formats):
     source_dir = Path(source_dir)
     image_paths = []
+
+    # First, try the 'dataset/images/{train,val}/' structure
     for fmt in image_formats:
         image_paths.extend(sorted(source_dir.glob(str(Path('images') / '**' / f'*.{fmt}'))))
+
+    # If not found, try the 'dataset/{train,val}/images/' structure
+    if not image_paths:
+        for fmt in image_formats:
+            image_paths.extend(sorted(source_dir.glob(str(Path('*') / 'images' / '**' / f'*.{fmt}'))))
 
     if not image_paths:
         return []

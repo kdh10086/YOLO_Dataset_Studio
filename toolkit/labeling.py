@@ -80,14 +80,32 @@ class IntegratedLabeler:
         cid,x1,y1,x2,y2=bbox; return cid,((x1+x2)/2)/self.w_orig,((y1+y2)/2)/self.h_orig,abs(x2-x1)/self.w_orig,abs(y2-y1)/self.h_orig
 
     def _load_data(self):
-        img_dir = os.path.join(self.dataset_dir, 'images')
-        if not os.path.isdir(img_dir): print(f"[Error] Not found: {img_dir}"); return False
         fmts = self.config.get('workflow_parameters',{}).get('image_format','png,jpg,jpeg').split(',')
-        self.image_paths = sorted([p for ext in fmts for p in glob.glob(os.path.join(img_dir, '**', f'*.{ext}'), recursive=True)])
-        if not self.image_paths: print(f"[Error] No images found."); return False
+
+        # Attempt 1: Standard structure (e.g., dataset/images/train/...)
+        img_dir_std = os.path.join(self.dataset_dir, 'images')
+        if os.path.isdir(img_dir_std):
+            self.image_paths = sorted([p for ext in fmts for p in glob.glob(os.path.join(img_dir_std, '**', f'*.{ext}'), recursive=True)])
+        else:
+            self.image_paths = []
+
+        # Attempt 2: Alternative structure (e.g., dataset/train/images/...) if the first one yielded no results
+        if not self.image_paths:
+            # This glob finds images in any subdirectory's 'images' folder, like 'train/images', 'val/images'
+            alt_paths = sorted([p for ext in fmts for p in glob.glob(os.path.join(self.dataset_dir, '* ', 'images', '**', f'*.{ext}'), recursive=True)])
+            if alt_paths:
+                self.image_paths = alt_paths
+                print("[Info] Detected alternative dataset structure (e.g., train/images).")
+
+        if not self.image_paths:
+            print(f"[Error] No images found in standard ('images/...') or alternative ('*/images/...') structures.")
+            return False
+
         rev_path = os.path.join(self.dataset_dir, 'review_list.txt')
-        if os.path.exists(rev_path): self.review_list = {ln.strip() for ln in open(rev_path, 'r') if ln.strip()}
-        self._apply_filter(); return True
+        if os.path.exists(rev_path):
+            self.review_list = {ln.strip() for ln in open(rev_path, 'r') if ln.strip()}
+        self._apply_filter()
+        return True
 
     def _save_current_labels(self):
         if self.img_index < len(self.image_paths):
@@ -398,43 +416,43 @@ def auto_label_dataset(dataset_path, weights_path, config):
     print(f"Auto-labeling on device: {device}")
     model = YOLO(weights_path).to(device)
 
-    img_dir = os.path.join(dataset_path, 'images')
-    lbl_dir = os.path.join(dataset_path, 'labels')
-    os.makedirs(lbl_dir, exist_ok=True)
-
+    # --- Flexible Image Path Discovery ---
     image_formats = workflow_params.get('image_format', 'png,jpg,jpeg').split(',')
-    paths = [p for fmt in image_formats for p in glob.glob(os.path.join(img_dir, f'*.{fmt}'))]
+    # Attempt 1: Standard structure (e.g., dataset/images/train/...)
+    paths = sorted([p for fmt in image_formats for p in glob.glob(os.path.join(dataset_path, 'images', '**', f'*.{fmt}'), recursive=True)])
+    # Attempt 2: Alternative structure (e.g., dataset/train/images/...)
+    if not paths:
+        alt_paths = sorted([p for fmt in image_formats for p in glob.glob(os.path.join(dataset_path, '* ', 'images', '**', f'*.{fmt}'), recursive=True)])
+        if alt_paths:
+            paths = alt_paths
+            print("[Info] Detected alternative dataset structure for auto-labeling.")
 
     if not paths:
-        print("[Warning] No images found to label.")
+        print("[Warning] No images found to label in any known structure.")
         return
 
     print(f"Found {len(paths)} images to process...")
     for i in tqdm(range(0, len(paths), batch), desc="Auto-labeling"):
         batch_paths = paths[i:i+batch]
         try:
-            # Get results from the model
             results = model(batch_paths, conf=conf, verbose=False)
 
-            # Process and save results in a clear loop
             for r in results:
                 if not r.boxes:
                     continue
 
-                # Define the output path for the label file
-                label_filename = os.path.splitext(os.path.basename(r.path))[0] + '.txt'
-                output_path = os.path.join(lbl_dir, label_filename)
+                # --- Robust Label Path Generation ---
+                output_path = get_label_path(r.path)
+                # Ensure the directory for the label file exists
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-                # Prepare the content to be written
                 lines = []
                 for box in r.boxes:
-                    # Ensure box.xywhn is not empty and has the expected structure
                     if box.xywhn.nelement() > 0:
                         xywhn = box.xywhn[0]
                         line = f"{int(box.cls)} {xywhn[0]:.6f} {xywhn[1]:.6f} {xywhn[2]:.6f} {xywhn[3]:.6f}"
                         lines.append(line)
 
-                # Write the lines to the file
                 if lines:
                     with open(output_path, 'w') as f:
                         f.write('\n'.join(lines))

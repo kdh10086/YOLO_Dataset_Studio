@@ -250,22 +250,53 @@ def run_labeling_tool():
     print("\nLaunching labeler... Close the labeling window to return to the menu.")
     labeling.launch_labeler(dataset_dir, config)
 
+def get_split_ratios_from_user():
+    """Interactively prompts the user to enter split ratios that sum to 10."""
+    while True:
+        prompt = "Enter split ratios for train, val, and optionally test (e.g., '7 3' or '6 2 2'). The sum must be 10."
+        ratios_str = get_input(prompt)
+        if ratios_str == 'c':
+            return 'c'
+
+        try:
+            parts = [int(p) for p in ratios_str.split()]
+            if sum(parts) != 10:
+                print(f"\n[Error] The sum of the ratios must be 10, but got {sum(parts)}. Please try again.")
+                continue
+
+            if len(parts) == 2:
+                return {'train': parts[0], 'val': parts[1]}
+            elif len(parts) == 3:
+                return {'train': parts[0], 'val': parts[1], 'test': parts[2]}
+            else:
+                print("\n[Error] Please enter 2 or 3 numbers (e.g., for train/val or train/val/test). Please try again.")
+                continue
+        except ValueError:
+            print("\n[Error] Invalid input. Please enter space-separated numbers (e.g., '7 3').")
+
 def run_split_dataset():
     print("\n--- Split Dataset for Training ---")
-    print("Splits a labeled dataset into 'train' and 'val' subsets and creates a data.yaml file.")
+    print("Splits a labeled dataset into 'train', 'val' (and optionally 'test') subsets and creates a data.yaml file.")
     print_cancel_message()
 
     dataset_dir = get_dataset_from_user("Select a dataset to split")
     if dataset_dir == 'c' or not dataset_dir: return
 
-    workflow_params = config.get('workflow_parameters', {})
+    ratios = get_split_ratios_from_user()
+    if ratios == 'c':
+        print("\nOperation cancelled.")
+        return
+
     model_configs = config.get('model_configurations', {})
-    ratio = workflow_params.get('train_split_ratio')
+    workflow_params = config.get('workflow_parameters', {})
     classes = model_configs.get('classes')
     fmts = workflow_params.get('image_format', 'png,jpg,jpeg').split(',')
 
-    if not all([ratio, classes]): print("\n[Error] Missing 'train_split_ratio' or 'classes' in models_config.yaml."); return
-    data_handler.split_dataset_for_training(dataset_dir, ratio, classes, fmts)
+    if not classes:
+        print("\n[Error] Missing 'classes' in models_config.yaml.")
+        return
+
+    data_handler.split_dataset_for_training(dataset_dir, ratios, classes, fmts)
 
 def run_unified_training():
     print("\n--- Train a Model ---")
@@ -342,10 +373,42 @@ def run_merge_datasets():
     print_cancel_message()
 
     input_dirs = get_multiple_datasets_from_user()
-    if 'c' in input_dirs: return
-    if not input_dirs or len(input_dirs) < 2: print("\n[Error] Select at least two datasets."); return
+    if not input_dirs or len(input_dirs) < 2:
+        print("\n[Error] Select at least two datasets to merge.")
+        return
 
-    output_dir = get_input("Enter path for the new merged dataset")
+    # --- Get Merge Strategy ---
+    print("\n--- Select Merge Strategy ---")
+    print("  [1] Flatten Merge: Combine all files into new 'images' and 'labels' folders.")
+    print("  [2] Structured Merge: Preserve the directory structure of a base dataset.")
+    strategy_choice = get_input("Select a strategy", default='1')
+    if strategy_choice == 'c': return
+
+    strategy = 'flatten'
+    base_dataset = None
+
+    if strategy_choice == '2':
+        strategy = 'structured'
+        print("\n--- Select Base Dataset ---")
+        print("The structure of this dataset will be used for the merged output.")
+        for i, path in enumerate(input_dirs, 1):
+            print(f"  <{i}> {path}")
+        
+        while True:
+            base_choice_str = get_input("Select a base dataset (by number)")
+            if base_choice_str == 'c': return
+            try:
+                choice_int = int(base_choice_str)
+                if 1 <= choice_int <= len(input_dirs):
+                    base_dataset = input_dirs[choice_int - 1]
+                    break
+                else:
+                    print(f"[Error] Invalid selection.")
+            except ValueError:
+                print("[Error] Invalid input. Please enter a number.")
+
+    # --- Get Output Directory ---
+    output_dir = get_input("\nEnter path for the new merged dataset")
     if output_dir == 'c' or not output_dir: return
 
     exist_ok_str = get_input(f"If '{output_dir}' exists, overwrite? (y/N)", default='n')
@@ -353,7 +416,7 @@ def run_merge_datasets():
     exist_ok = exist_ok_str.lower() == 'y'
 
     fmts = config.get('workflow_parameters', {}).get('image_format', 'png,jpg,jpeg').split(',')
-    data_handler.merge_datasets(input_dirs, output_dir, fmts, exist_ok)
+    data_handler.merge_datasets(input_dirs, output_dir, fmts, exist_ok, strategy, base_dataset)
 
 def run_random_sampler():
     print("\n--- Sample from Dataset ---")
