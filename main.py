@@ -78,6 +78,22 @@ def display_main_ui():
     clear_screen()
     display_header()
     
+    # --- Registered Datasets Panel (Top) ---
+    print(" Registered Datasets ".center(80, "-"))
+    if not registered_datasets:
+        print(" No datasets registered yet. Use option [8] to add one.")
+    else:
+        for i, path in enumerate(registered_datasets, 1):
+            print(f"  <{i}> {path}")
+    
+    print() 
+    #print("-" * 80)
+
+    # --- Operation Option Title ---
+    print(" Operation Options ".center(80, "-"))
+    print()
+
+    # --- Main Menu Panel (Bottom) ---
     menu = {
         "--- Data Preparation ---": {
             "1": "Extract Images from ROS Bag",
@@ -105,27 +121,12 @@ def display_main_ui():
             menu["--- Data Preparation ---"]["1"] += " (Interactive Modes Disabled)"
         menu["--- Data Preparation ---"]["2"] += " (Disabled: GUI Not Available)"
 
-    left_panel_lines = []
     for phase, options in menu.items():
-        left_panel_lines.append(phase)
+        print(phase)
         for key, value in options.items():
-            left_panel_lines.append(f"  [{key}] {value}")
-        left_panel_lines.append("")
+            print(f"  [{key}] {value}")
+        print() # Add a space after each section
 
-    right_panel_lines = ["--- Registered Datasets ---"]
-    if not registered_datasets:
-        right_panel_lines.append(" No datasets registered yet.")
-        right_panel_lines.append(" Use option [8] to add one.")
-    else:
-        for i, path in enumerate(registered_datasets, 1):
-            right_panel_lines.append(f"  [{i}] {path}")
-    right_panel_lines.append("")
-
-    max_lines = max(len(left_panel_lines), len(right_panel_lines))
-    for i in range(max_lines):
-        left_line = left_panel_lines[i] if i < len(left_panel_lines) else ""
-        right_line = right_panel_lines[i] if i < len(right_panel_lines) else ""
-        print(f"{left_line:<55}{right_line}")
     print("-" * 80)
 
 def get_dataset_from_user(prompt="Select a dataset to use (by number)"):
@@ -154,7 +155,7 @@ def get_multiple_datasets_from_user():
     while True:
         print("\n--- Select datasets to merge (enter 'c' to finish) ---")
         for i, path in enumerate(registered_datasets, 1):
-            print(f"  [{i}] {path} {'(selected)' if path in selected_datasets else ''}")
+            print(f"  <{i}> {path} {'(selected)' if path in selected_datasets else ''}")
         
         choice_str = get_input("Enter number to add/remove (or press Enter to finish)")
         if choice_str == 'c' or choice_str == '':
