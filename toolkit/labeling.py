@@ -59,9 +59,9 @@ class IntegratedLabeler:
 
         box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
         box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
-        
+
         union_area = box1_area + box2_area - inter_area
-        
+
         return inter_area / union_area
 
     def _draw_dotted_rectangle(self, img, pt1, pt2, color, thickness, gap=10):
@@ -135,7 +135,7 @@ class IntegratedLabeler:
         if self.current_mouse_pos:
             mx, my = self.current_mouse_pos
             color = (0, 0, 255) if self.mode == 'delete' else self.colors.get(self.current_class_id, (0, 255, 255))
-            cv2.line(self.clone, (mx, 0), (mx, h), color, 1) 
+            cv2.line(self.clone, (mx, 0), (mx, h), color, 1)
             cv2.line(self.clone, (0, my), (w, my), color, 1)
 
 
@@ -151,7 +151,7 @@ class IntegratedLabeler:
             return
 
         mx_orig, my_orig = int(self.current_mouse_pos[0] / self.ratio), int(self.current_mouse_pos[1] / self.ratio)
-        
+
         # Define the size of the region to crop before zooming
         crop_w = int(self.magnifier_size / self.magnifier_zoom_level)
         crop_h = int(self.magnifier_size / self.magnifier_zoom_level)
@@ -172,7 +172,7 @@ class IntegratedLabeler:
         # Determine where to place the valid image region onto the black canvas
         x_dst_start = max(0, -x1_ideal)
         y_dst_start = max(0, -y1_ideal)
-        
+
         # Get the width and height of the actual region to copy
         copy_w = x_src_end - x_src_start
         copy_h = y_src_end - y_src_start
@@ -181,7 +181,7 @@ class IntegratedLabeler:
         if copy_w > 0 and copy_h > 0:
             padded_crop[y_dst_start:y_dst_start+copy_h, x_dst_start:x_dst_start+copy_w] = \
                 self.img_orig[y_src_start:y_src_end, x_src_start:x_src_end]
-        
+
         # Resize the padded crop to the final magnifier size. This prevents stretching.
         magnifier_img = cv2.resize(padded_crop, (self.magnifier_size, self.magnifier_size), interpolation=cv2.INTER_NEAREST)
         h_mag, w_mag, _ = magnifier_img.shape
@@ -208,7 +208,7 @@ class IntegratedLabeler:
 
         # Draw a dynamic crosshair in the center of the magnifier
         crosshair_color = (0, 0, 255) if self.mode == 'delete' else self.colors.get(self.current_class_id, (0, 255, 255))
-        cv2.line(magnifier_img, (w_mag // 2, 0), (w_mag // 2, h_mag), crosshair_color, 2) 
+        cv2.line(magnifier_img, (w_mag // 2, 0), (w_mag // 2, h_mag), crosshair_color, 2)
         cv2.line(magnifier_img, (0, h_mag // 2), (w_mag, h_mag // 2), crosshair_color, 2)
 
         cv2.imshow(self.magnifier_window_name, magnifier_img)
@@ -225,7 +225,7 @@ class IntegratedLabeler:
                 # Finalize the rectangle
                 rect_x1, rect_y1 = min(self.first_point[0], ox), min(self.first_point[1], oy)
                 rect_x2, rect_y2 = max(self.first_point[0], ox), max(self.first_point[1], oy)
-                
+
                 if self.mode == 'draw':
                     self.current_bboxes.append((self.current_class_id, rect_x1, rect_y1, rect_x2, rect_y2))
                 elif self.mode == 'delete':
@@ -233,7 +233,7 @@ class IntegratedLabeler:
                     # Keep boxes whose center is NOT within the deletion rectangle
                     self.current_bboxes = [
                         b for b in self.current_bboxes
-                        if not (rect_x1 < (b[1] + b[3]) / 2 < rect_x2 and 
+                        if not (rect_x1 < (b[1] + b[3]) / 2 < rect_x2 and
                                 rect_y1 < (b[2] + b[4]) / 2 < rect_y2)
                     ]
                     removed_count = initial_box_count - len(self.current_bboxes)
@@ -241,7 +241,7 @@ class IntegratedLabeler:
                         print(f"-> Removed {removed_count} boxes.")
 
                 self.first_point = None # Reset for next operation
-        
+
         elif event == cv2.EVENT_RBUTTONDOWN:
             if self.first_point is not None:
                 self.first_point = None
@@ -265,9 +265,9 @@ class IntegratedLabeler:
         if self.img_orig is None: return False
 
         self.current_bboxes, self.history, self.first_point = [], [], None
-        
+
         self.h_orig, self.w_orig = self.img_orig.shape[:2]
-        
+
         self.ratio = self.display_width / self.w_orig
         self.display_img = cv2.resize(self.img_orig, (self.display_width, int(self.h_orig * self.ratio)))
 
@@ -287,7 +287,7 @@ class IntegratedLabeler:
 
     def run(self):
         if not self._load_data(): return
-        
+
         print("\n" + "="*50)
         print(" " * 12 + "Integrated Labeler Controls")
         print("="*50)
@@ -308,7 +308,7 @@ class IntegratedLabeler:
         print("  - [T]: Toggle Filter (All / Review)")
         print("  - [X]: Exclude Current Image")
         print("="*50)
-        
+
         cv2.namedWindow(self.window_name, cv2.WINDOW_AUTOSIZE)
         cv2.setMouseCallback(self.window_name, self._handle_mouse)
         cv2.namedWindow(self.magnifier_window_name, cv2.WINDOW_NORMAL)
@@ -325,15 +325,15 @@ class IntegratedLabeler:
                     progress = f"({self.filtered_image_indices.index(self.img_index) + 1}/{len(self.filtered_image_indices)})"
                 except ValueError:
                     progress = "(0/0)"
-                
+
                 title = f"Labeler {progress} - {img_name} - MODE: {self.mode.upper()}"
                 if self.mode == 'draw':
                     title += f" (Class: {self.classes.get(self.current_class_id, 'N/A')})"
                 cv2.setWindowTitle(self.window_name, title)
-                
+
                 self._redraw_ui()
                 self._update_magnifier()
-                
+
                 cv2.imshow(self.window_name, self.clone)
                 key = cv2.waitKey(1) & 0xFF
 
@@ -369,7 +369,7 @@ class IntegratedLabeler:
                     self._apply_filter()
                     if self.filtered_image_indices: self.img_index = self.filtered_image_indices[0]
                     break
-        
+
         self._save_review_list()
         cv2.destroyAllWindows()
 
@@ -382,10 +382,10 @@ def auto_label_dataset(dataset_path, weights_path, config):
     teacher_config = model_configs.get('teacher_model_config', {})
     hyperparams = teacher_config.get('hyperparameters', {})
     models_params = hyperparams.get('models', {})
-    
+
     conf = workflow_params.get('auto_label_confidence_threshold', 0.3)
     model_name = teacher_config.get('model_name', 'default')
-    
+
     # Robustly get batch size, falling back to default
     model_specific_params = models_params.get(model_name, models_params.get('default', {}))
     batch = model_specific_params.get('batch_size', 16)
@@ -415,16 +415,16 @@ def auto_label_dataset(dataset_path, weights_path, config):
         try:
             # Get results from the model
             results = model(batch_paths, conf=conf, verbose=False)
-            
+
             # Process and save results in a clear loop
             for r in results:
                 if not r.boxes:
                     continue
-                
+
                 # Define the output path for the label file
                 label_filename = os.path.splitext(os.path.basename(r.path))[0] + '.txt'
                 output_path = os.path.join(lbl_dir, label_filename)
-                
+
                 # Prepare the content to be written
                 lines = []
                 for box in r.boxes:
@@ -433,7 +433,7 @@ def auto_label_dataset(dataset_path, weights_path, config):
                         xywhn = box.xywhn[0]
                         line = f"{int(box.cls)} {xywhn[0]:.6f} {xywhn[1]:.6f} {xywhn[2]:.6f} {xywhn[3]:.6f}"
                         lines.append(line)
-                
+
                 # Write the lines to the file
                 if lines:
                     with open(output_path, 'w') as f:
@@ -441,5 +441,5 @@ def auto_label_dataset(dataset_path, weights_path, config):
 
         except Exception as e:
             print(f"\n[Error] Failed to process batch starting with {os.path.basename(batch_paths[0])}: {e}")
-            
+
     print("\nAuto-labeling complete.")

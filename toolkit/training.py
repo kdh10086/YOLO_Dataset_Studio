@@ -58,7 +58,7 @@ def _check_for_quit_key():
     finally:
         # Always try to restore the terminal settings
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
-    
+
     if stop_training_flag:
         print("\n'q' key detected! Training will stop after the current epoch.")
 
@@ -87,7 +87,7 @@ def train_yolo_model(dataset_path, model_config_name, role, run_name, global_con
         h_params = model_cfg['hyperparameters']
         model_name = model_cfg['model_name']
         model_specific_params = h_params['models'].get(model_name, h_params['models']['default'])
-        
+
         epochs = h_params['epochs']
         patience = h_params['patience']
         batch_size = model_specific_params['batch_size']

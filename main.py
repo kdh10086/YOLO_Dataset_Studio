@@ -15,7 +15,7 @@ GUI_ENABLED = False
 def check_environment():
     """Checks for ROS2 and GUI capabilities, warning the user if features are disabled."""
     global ROS2_ENABLED, GUI_ENABLED
-    
+
     # 1. Check for ROS2
     try:
         from rosbag2_py import SequentialReader
@@ -52,13 +52,13 @@ def get_input(prompt, default=None):
         full_prompt = f"{prompt} [Default: {default}]: "
     else:
         full_prompt = f"{prompt}: "
-    
+
     raw_user_input = input(full_prompt)
     user_input = raw_user_input.strip()
 
     if user_input.lower() == 'c':
         return 'c'
-    
+
     return user_input or default if default is not None else user_input
 
 # --- Global State ---
@@ -77,7 +77,7 @@ def display_header():
 def display_main_ui():
     clear_screen()
     display_header()
-    
+
     # --- Registered Datasets Panel (Top) ---
     print(" Registered Datasets ".center(80, "-"))
     if not registered_datasets:
@@ -85,9 +85,8 @@ def display_main_ui():
     else:
         for i, path in enumerate(registered_datasets, 1):
             print(f"  <{i}> {path}")
-    
-    print() 
-    #print("-" * 80)
+
+    print()
 
     # --- Operation Option Title ---
     print(" Operation Options ".center(80, "-"))
@@ -130,10 +129,10 @@ def display_main_ui():
     print("-" * 80)
 
 def get_dataset_from_user(prompt="Select a dataset to use (by number)"):
-    if not registered_datasets: 
+    if not registered_datasets:
         print("\n[Error] No datasets registered.")
         return None
-    
+
     while True:
         choice_str = get_input(prompt)
         if choice_str == 'c': return 'c'
@@ -150,17 +149,17 @@ def get_multiple_datasets_from_user():
     if not registered_datasets:
         print("\n[Error] No datasets registered.")
         return []
-    
+
     selected_datasets = []
     while True:
         print("\n--- Select datasets to merge (enter 'c' to finish) ---")
         for i, path in enumerate(registered_datasets, 1):
             print(f"  <{i}> {path} {'(selected)' if path in selected_datasets else ''}")
-        
+
         choice_str = get_input("Enter number to add/remove (or press Enter to finish)")
         if choice_str == 'c' or choice_str == '':
             break
-        
+
         try:
             path = registered_datasets[int(choice_str) - 1]
             if path in selected_datasets:
@@ -175,7 +174,7 @@ def add_dataset_directory():
     print("\n--- Add New Dataset Directory ---")
     print("Registers a new dataset directory path for use in other toolkit functions.")
     print_cancel_message()
-    
+
     path_str = get_input("Enter the absolute path to the dataset directory")
     if path_str == 'c' or not path_str: return
 
@@ -203,7 +202,7 @@ def run_extract_from_bag():
 
     output_dir = get_input("Enter path for output dataset")
     if output_dir == 'c' or not output_dir: return
-    
+
     mode = 0
     if GUI_ENABLED:
         mode_str = get_input("Select mode (0: All, 1: Interactive Single, 2: Interactive Range)", default="0")
@@ -225,7 +224,7 @@ def run_extract_from_bag():
 def run_labeling_tool():
     print("\n--- Launch Integrated Labeling Tool ---")
     print("A GUI tool for creating and reviewing bounding box labels.")
-    
+
     # Display class information and key-bindings
     classes = config.get('model_configurations', {}).get('classes', {})
     if not classes:
@@ -247,7 +246,7 @@ def run_labeling_tool():
 
     dataset_dir = get_dataset_from_user("Select a dataset to label/review")
     if dataset_dir == 'c' or not dataset_dir: return
-    
+
     print("\nLaunching labeler... Close the labeling window to return to the menu.")
     labeling.launch_labeler(dataset_dir, config)
 
@@ -258,7 +257,7 @@ def run_split_dataset():
 
     dataset_dir = get_dataset_from_user("Select a dataset to split")
     if dataset_dir == 'c' or not dataset_dir: return
-    
+
     workflow_params = config.get('workflow_parameters', {})
     model_configs = config.get('model_configurations', {})
     ratio = workflow_params.get('train_split_ratio')
@@ -277,13 +276,13 @@ def run_unified_training():
     role_choice = get_input("What type of model to train? [1] Teacher, [2] Student")
     if role_choice == 'c': return
     if role_choice not in ['1', '2']: print("[Error] Invalid choice."); return
-    
+
     role = 'teacher' if role_choice == '1' else 'student'
     model_config_name = f'{role}_model_config'
-    
+
     dataset_path = get_dataset_from_user(f"Select a dataset for training the {role.capitalize()} model")
     if dataset_path == 'c' or not dataset_path: return
-    
+
     model_configs = config.get('model_configurations', {})
     model_name = model_configs.get(model_config_name, {}).get('model_name')
     if not model_name: print(f"[Error] Could not find model name for '{model_config_name}' in config."); return
@@ -291,11 +290,11 @@ def run_unified_training():
     dataset_name = os.path.basename(os.path.normpath(dataset_path))
     run_name = f"{role}_{model_name}_{dataset_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     print(f"\nGenerated Run Name: {run_name}")
-    
+
     exist_ok_str = get_input("Overwrite previous run with same name? (y/N)", default='n')
     if exist_ok_str == 'c': return
     exist_ok = exist_ok_str.lower() == 'y'
-    
+
     training.train_yolo_model(dataset_path, model_config_name, role, run_name, config, exist_ok)
 
 def run_auto_labeler():
@@ -311,12 +310,12 @@ def run_auto_labeler():
         print("\n[Error] No trained Teacher models (.pt files) found in 'runs/train/teacher/'.")
         print("Please train a teacher model first or ensure weights files are in the correct directory.")
         return
-    
+
     # Show a list and get user selection
     print("\nPlease select a Teacher model to use for labeling:")
     for i, model_path in enumerate(teacher_models, 1):
         print(f"  [{i}] {model_path}")
-    
+
     weights_path = None
     while True:
         choice_str = get_input("Select a model (by number)")
@@ -330,10 +329,10 @@ def run_auto_labeler():
                 print(f"[Error] Invalid selection.")
         except ValueError:
             print("[Error] Invalid input. Please enter a number.")
-    
+
     dataset_path = get_dataset_from_user("Select a dataset to auto-label")
     if dataset_path == 'c' or not dataset_path: return
-    
+
     print(f"\nUsing model: {weights_path}")
     labeling.auto_label_dataset(dataset_path, weights_path, config)
 
@@ -345,10 +344,10 @@ def run_merge_datasets():
     input_dirs = get_multiple_datasets_from_user()
     if 'c' in input_dirs: return
     if not input_dirs or len(input_dirs) < 2: print("\n[Error] Select at least two datasets."); return
-    
+
     output_dir = get_input("Enter path for the new merged dataset")
     if output_dir == 'c' or not output_dir: return
-    
+
     exist_ok_str = get_input(f"If '{output_dir}' exists, overwrite? (y/N)", default='n')
     if exist_ok_str == 'c': return
     exist_ok = exist_ok_str.lower() == 'y'
@@ -363,12 +362,12 @@ def run_random_sampler():
 
     source_dir = get_dataset_from_user("Select a source dataset")
     if source_dir == 'c' or not source_dir: return
-    
+
     output_dir = get_input("Enter path for the new sampled dataset")
     if output_dir == 'c' or not output_dir: return
 
     fmts = config.get('workflow_parameters', {}).get('image_format', 'png,jpg,jpeg').split(',')
-    
+
     # Get total image count
     all_image_data = data_handler.get_all_image_data(source_dir, fmts)
     total_images = len(all_image_data)
@@ -378,10 +377,10 @@ def run_random_sampler():
         return
 
     print(f"\nTotal images in dataset: {total_images}")
-    
+
     desired_samples_str = get_input(f"Enter desired number of samples (1-{total_images})")
     if desired_samples_str == 'c': return
-    
+
     try:
         desired_samples = int(desired_samples_str)
         if not (1 <= desired_samples <= total_images):
@@ -390,14 +389,14 @@ def run_random_sampler():
     except ValueError:
         print("[Error] Invalid number of samples.")
         return
-    
+
     ratio = desired_samples / total_images
     print(f"Calculated sampling ratio: {ratio:.4f}")
 
     method_choice = get_input("Select sampling method [1] Random, [2] Uniform (distributed)", default='1')
     if method_choice == 'c': return
     method = 'uniform' if method_choice == '2' else 'random'
-    
+
     exist_ok_str = get_input(f"If '{output_dir}' exists, overwrite? (y/N)", default='n')
     if exist_ok_str == 'c': return
     exist_ok = exist_ok_str.lower() == 'y'
@@ -420,13 +419,13 @@ def main():
         '4': run_unified_training, '5': run_auto_labeler, '6': run_merge_datasets,
         '7': run_random_sampler, '8': add_dataset_directory
     }
-    
+
     while True:
         display_main_ui()
         choice = input("Select an option: ").strip()
-        
+
         if choice == '0': print("Exiting toolkit. Goodbye!"); break
-        
+
         if choice == '1' and not ROS2_ENABLED:
             print("\n[Error] This feature is disabled. Please install ROS2 and source the environment.")
             input("\nPress Enter to return...")
@@ -445,7 +444,7 @@ def main():
             except Exception as e:
                 print(f"\n[UNHANDLED ERROR] An unexpected error occurred: {e}")
                 input("\nPress Enter to return...")
-        else: 
+        else:
             print(f"\n[Error] Invalid option '{choice}'.")
             input("\nPress Enter...")
 

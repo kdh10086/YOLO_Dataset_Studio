@@ -38,7 +38,7 @@ def extract_images_from_rosbag(rosbag_dir, output_dir, image_topic, image_format
 
     images_dir = os.path.join(output_dir, 'images')
     os.makedirs(images_dir, exist_ok=True)
-    
+
     start_index = 0
     existing = [int(os.path.splitext(f)[0]) for f in os.listdir(images_dir) if f.split('.')[-1] in image_formats and f.split('.')[0].isdigit()]
     if existing:
@@ -55,7 +55,7 @@ def extract_images_from_rosbag(rosbag_dir, output_dir, image_topic, image_format
     if not topic_type_str:
         print(f"[Error] Topic '{image_topic}' not found in the bag file.")
         return False
-        
+
     msg_type = get_message(topic_type_str)
     bridge = CvBridge()
     saved_count = 0
@@ -78,7 +78,7 @@ def extract_images_from_rosbag(rosbag_dir, output_dir, image_topic, image_format
 
     # --- Interactive extraction (modes 1 and 2) ---
     is_paused, is_saving, save_single, cv_image = True, False, False, None
-    
+
     def mouse_callback(event, x, y, flags, param):
         nonlocal save_single, is_saving
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -104,12 +104,12 @@ def extract_images_from_rosbag(rosbag_dir, output_dir, image_topic, image_format
             except Exception as e:
                 print(f"\n[Warning] End of bag or error reading message: {e}")
                 break
-        
+
         if cv_image is None:
             continue
 
         display_image = cv_image.copy()
-        
+
         # Visual feedback for saving state
         if is_saving and mode == 2:
             cv2.circle(display_image, (30, 30), 20, (0, 0, 255), -1)
@@ -153,7 +153,7 @@ def split_dataset_for_training(dataset_dir, train_ratio, class_names, image_form
     # Find all image files and ensure they have a corresponding label file
     image_paths = [p for fmt in image_formats for p in glob.glob(os.path.join(images_dir, f'*.{fmt}'))]
     valid_pairs = [p for p in image_paths if os.path.exists(get_label_path(p))]
-    
+
     if not valid_pairs:
         print("[Warning] No valid image-label pairs found to split.")
         return False
@@ -202,7 +202,7 @@ def merge_datasets(input_dirs, output_dir, image_formats, exist_ok=False):
     out_img = os.path.join(output_dir,'images'); out_lbl = os.path.join(output_dir,'labels'); os.makedirs(out_img); os.makedirs(out_lbl)
     all_images = [p for d in input_dirs for fmt in image_formats for p in glob.glob(os.path.join(d,'**',f'*.{fmt}'),recursive=True)]
     c=0
-    for img_path in tqdm(all_images, desc="Merging"): 
+    for img_path in tqdm(all_images, desc="Merging"):
         lbl_path = get_label_path(img_path)
         if os.path.exists(lbl_path):
             ext=os.path.splitext(img_path)[1]; new_base=f"{c:06d}"
