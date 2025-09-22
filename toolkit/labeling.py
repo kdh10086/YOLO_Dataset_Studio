@@ -1,4 +1,3 @@
-
 import cv2
 import os
 import sys
@@ -65,6 +64,18 @@ class IntegratedLabeler:
         
         return inter_area / union_area
 
+    def _draw_dotted_rectangle(self, img, pt1, pt2, color, thickness, gap=10):
+        """Draws a dotted rectangle, used for the deletion mode indicator."""
+        s, e = (min(pt1[0], pt2[0]), min(pt1[1], pt2[1])), (max(pt1[0], pt2[0]), max(pt1[1], pt2[1]))
+        # Draw horizontal lines
+        for i in range(s[0], e[0], gap * 2):
+            cv2.line(img, (i, s[1]), (min(i + gap, e[0]), s[1]), color, thickness)
+            cv2.line(img, (i, e[1]), (min(i + gap, e[0]), e[1]), color, thickness)
+        # Draw vertical lines
+        for i in range(s[1], e[1], gap * 2):
+            cv2.line(img, (s[0], i), (s[0], min(i + gap, e[1])), color, thickness)
+            cv2.line(img, (e[0], i), (e[0], min(i + gap, e[1])), color, thickness)
+
     def _pixels_to_yolo(self, bbox):
         cid,x1,y1,x2,y2=bbox; return cid,((x1+x2)/2)/self.w_orig,((y1+y2)/2)/self.h_orig,abs(x2-x1)/self.w_orig,abs(y2-y1)/self.h_orig
 
@@ -111,15 +122,22 @@ class IntegratedLabeler:
             end_point_scaled = self.current_mouse_pos
             if self.mode == 'draw':
                 color = self.colors.get(self.current_class_id, (0, 255, 0))
+                cv2.rectangle(self.clone, start_point_scaled, end_point_scaled, color, 2)
+                # Display class name next to the cursor while drawing
+                class_name = self.classes.get(self.current_class_id, "Unknown")
+                text_pos = (end_point_scaled[0], end_point_scaled[1] - 10)
+                cv2.putText(self.clone, class_name, text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
             else: # 'delete' mode
                 color = (0, 0, 255) # Red
-            cv2.rectangle(self.clone, start_point_scaled, end_point_scaled, color, 2)
+                self._draw_dotted_rectangle(self.clone, start_point_scaled, end_point_scaled, color, 2)
 
         # Draw crosshairs
         if self.current_mouse_pos:
             mx, my = self.current_mouse_pos
-            cv2.line(self.clone, (mx, 0), (mx, h), (255, 0, 0), 1) # Blue color, thickness 1
-            cv2.line(self.clone, (0, my), (w, my), (255, 0, 0), 1) # Blue color, thickness 1
+            color = (0, 0, 255) if self.mode == 'delete' else self.colors.get(self.current_class_id, (0, 255, 255))
+            cv2.line(self.clone, (mx, 0), (mx, h), color, 1) 
+            cv2.line(self.clone, (0, my), (w, my), color, 1)
+
 
         # Add review flag indicator
         if os.path.basename(self.image_paths[self.img_index]) in self.review_list:
@@ -133,33 +151,65 @@ class IntegratedLabeler:
             return
 
         mx_orig, my_orig = int(self.current_mouse_pos[0] / self.ratio), int(self.current_mouse_pos[1] / self.ratio)
+        
+        # Define the size of the region to crop before zooming
         crop_w = int(self.magnifier_size / self.magnifier_zoom_level)
         crop_h = int(self.magnifier_size / self.magnifier_zoom_level)
-        x1, y1 = max(0, mx_orig - crop_w // 2), max(0, my_orig - crop_h // 2)
-        x2, y2 = min(self.w_orig, x1 + crop_w), min(self.h_orig, y1 + crop_h)
-        crop = self.img_orig[y1:y2, x1:x2]
+
+        # Calculate the ideal top-left corner of the crop area (can be negative)
+        x1_ideal = mx_orig - crop_w // 2
+        y1_ideal = my_orig - crop_h // 2
+
+        # Create a black canvas that will contain the crop
+        padded_crop = np.zeros((crop_h, crop_w, 3), dtype=np.uint8)
+
+        # Determine the overlapping region between the ideal crop and the actual image
+        x_src_start = max(0, x1_ideal)
+        y_src_start = max(0, y1_ideal)
+        x_src_end = min(self.w_orig, x1_ideal + crop_w)
+        y_src_end = min(self.h_orig, y1_ideal + crop_h)
+
+        # Determine where to place the valid image region onto the black canvas
+        x_dst_start = max(0, -x1_ideal)
+        y_dst_start = max(0, -y1_ideal)
         
-        magnifier_img = cv2.resize(crop, (self.magnifier_size, self.magnifier_size), interpolation=cv2.INTER_NEAREST)
+        # Get the width and height of the actual region to copy
+        copy_w = x_src_end - x_src_start
+        copy_h = y_src_end - y_src_start
+
+        # Copy the valid image data to the canvas if there is an overlap
+        if copy_w > 0 and copy_h > 0:
+            padded_crop[y_dst_start:y_dst_start+copy_h, x_dst_start:x_dst_start+copy_w] = \
+                self.img_orig[y_src_start:y_src_end, x_src_start:x_src_end]
+        
+        # Resize the padded crop to the final magnifier size. This prevents stretching.
+        magnifier_img = cv2.resize(padded_crop, (self.magnifier_size, self.magnifier_size), interpolation=cv2.INTER_NEAREST)
         h_mag, w_mag, _ = magnifier_img.shape
 
+        # This function converts original image coordinates to the new magnifier view's coordinates
         def to_mag_coords(p):
             px, py = p
-            return int((px - x1) * self.magnifier_zoom_level), int((py - y1) * self.magnifier_zoom_level)
+            # The transformation is relative to the top-left of the ideal (padded) crop box
+            return int((px - x1_ideal) * self.magnifier_zoom_level), int((py - y1_ideal) * self.magnifier_zoom_level)
 
+        # Draw bounding boxes that are visible in the magnified region
         for cid, b_x1, b_y1, b_x2, b_y2 in self.current_bboxes:
-            if b_x2 > x1 and b_x1 < x2 and b_y2 > y1 and b_y1 < y2:
+            if b_x2 > x1_ideal and b_x1 < (x1_ideal + crop_w) and b_y2 > y1_ideal and b_y1 < (y1_ideal + crop_h):
                 color = self.colors.get(cid, (0, 255, 0))
                 cv2.rectangle(magnifier_img, to_mag_coords((b_x1, b_y1)), to_mag_coords((b_x2, b_y2)), color, 2)
 
+        # Draw the preview rectangle if a box is being drawn
         if self.first_point:
             if self.mode == 'draw':
                 color = self.colors.get(self.current_class_id, (0, 255, 0))
-            else:
+            else: # delete mode
                 color = (0, 0, 255) # Red
             cv2.rectangle(magnifier_img, to_mag_coords(self.first_point), to_mag_coords((mx_orig, my_orig)), color, 2)
 
-        cv2.line(magnifier_img, (w_mag // 2, 0), (w_mag // 2, h_mag), (255, 255, 0), 1)
-        cv2.line(magnifier_img, (0, h_mag // 2), (w_mag, h_mag // 2), (255, 255, 0), 1)
+        # Draw a dynamic crosshair in the center of the magnifier
+        crosshair_color = (0, 0, 255) if self.mode == 'delete' else self.colors.get(self.current_class_id, (0, 255, 255))
+        cv2.line(magnifier_img, (w_mag // 2, 0), (w_mag // 2, h_mag), crosshair_color, 2) 
+        cv2.line(magnifier_img, (0, h_mag // 2), (w_mag, h_mag // 2), crosshair_color, 2)
 
         cv2.imshow(self.magnifier_window_name, magnifier_img)
 
@@ -179,12 +229,17 @@ class IntegratedLabeler:
                 if self.mode == 'draw':
                     self.current_bboxes.append((self.current_class_id, rect_x1, rect_y1, rect_x2, rect_y2))
                 elif self.mode == 'delete':
-                    delete_rect = [rect_x1, rect_y1, rect_x2, rect_y2]
-                    # Keep boxes that have less than 50% IoU with the delete rectangle
+                    initial_box_count = len(self.current_bboxes)
+                    # Keep boxes whose center is NOT within the deletion rectangle
                     self.current_bboxes = [
-                        b for b in self.current_bboxes 
-                        if self._calculate_iou(b[1:], delete_rect) < 0.5
+                        b for b in self.current_bboxes
+                        if not (rect_x1 < (b[1] + b[3]) / 2 < rect_x2 and 
+                                rect_y1 < (b[2] + b[4]) / 2 < rect_y2)
                     ]
+                    removed_count = initial_box_count - len(self.current_bboxes)
+                    if removed_count > 0:
+                        print(f"-> Removed {removed_count} boxes.")
+
                 self.first_point = None # Reset for next operation
         
         elif event == cv2.EVENT_RBUTTONDOWN:
@@ -233,6 +288,27 @@ class IntegratedLabeler:
     def run(self):
         if not self._load_data(): return
         
+        print("\n" + "="*50)
+        print(" " * 12 + "Integrated Labeler Controls")
+        print("="*50)
+        print(" Modes & Drawing:")
+        print("  - [W]: Draw Mode (Default)")
+        print("  - [E]: Delete Mode")
+        print("  - [R]: Undo Last Action")
+        print("  - [1-9]: Select Class")
+        print("-" * 50)
+        print(" Navigation & Saving:")
+        print("  - [D]: Save & Next Image")
+        print("  - [A]: Save & Previous Image")
+        print("  - [Q]: Save & Quit")
+        print("  - [C]: Force Quit (discards current file's changes)")
+        print("-" * 50)
+        print(" Workflow:")
+        print("  - [F]: Flag / Unflag for Review")
+        print("  - [T]: Toggle Filter (All / Review)")
+        print("  - [X]: Exclude Current Image")
+        print("="*50)
+        
         cv2.namedWindow(self.window_name, cv2.WINDOW_AUTOSIZE)
         cv2.setMouseCallback(self.window_name, self._handle_mouse)
         cv2.namedWindow(self.magnifier_window_name, cv2.WINDOW_NORMAL)
@@ -275,6 +351,9 @@ class IntegratedLabeler:
                     if class_id in self.classes:
                         self.current_class_id = class_id
                         print(f"Current class set to: {self.classes.get(self.current_class_id, 'N/A')}")
+                        if self.mode == 'delete':
+                            self.mode = 'draw'
+                            print("-> Switched to Draw Mode")
                     else:
                         print(f"[Warning] Class ID {class_id} is not defined in config.")
                 elif key == ord('w'): self.mode = 'draw'
