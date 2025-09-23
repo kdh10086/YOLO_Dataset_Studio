@@ -57,7 +57,16 @@ model_configurations:
     # The name of the YOLO architecture for the Student model.
     model_name: 'yolov10n'
     # YOLO's "auto" mode automatically selects the hyperparameters.
-
+    hyperparameters:
+      epochs: 1000
+      patience: 50
+      models:
+        yolov10n:
+          batch_size: 32
+          img_size: 640
+        default:
+          batch_size: 16
+          img_size: 640
 
 # ==============================================================================
 # SECTION 2: WORKFLOW & TOOL PARAMETERS
