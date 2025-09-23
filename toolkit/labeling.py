@@ -80,27 +80,31 @@ class IntegratedLabeler:
         cid,x1,y1,x2,y2=bbox; return cid,((x1+x2)/2)/self.w_orig,((y1+y2)/2)/self.h_orig,abs(x2-x1)/self.w_orig,abs(y2-y1)/self.h_orig
 
     def _load_data(self):
-        fmts = self.config.get('workflow_parameters',{}).get('image_format','png,jpg,jpeg').split(',')
+        fmts = self.config.get('workflow_parameters', {}).get('image_format', 'png,jpg,jpeg').split(',')
 
-        # Attempt 1: Standard structure (e.g., dataset/images/train/...)
-        img_dir_std = os.path.join(self.dataset_dir, 'images')
-        if os.path.isdir(img_dir_std):
-            self.image_paths = sorted([p for ext in fmts for p in glob.glob(os.path.join(img_dir_std, '**', f'*.{ext}'), recursive=True)])
-        else:
-            self.image_paths = []
+        print("[Info] Searching for images in all subdirectories...")
+        # Find all image files recursively within the dataset directory.
+        all_image_files = sorted([
+            p for ext in fmts
+            for p in glob.glob(os.path.join(self.dataset_dir, '**', f'*.{ext}'), recursive=True)
+        ])
 
-        # Attempt 2: Alternative structure (e.g., dataset/train/images/...) if the first one yielded no results
+        # Filter these paths to only include those located within a directory named 'images'.
+        # This robustly handles both '.../images/train/...' and '.../train/images/...' structures.
+        sep = os.path.sep
+        self.image_paths = [
+            path for path in all_image_files
+            if f'{sep}images{sep}' in path
+        ]
+
         if not self.image_paths:
-            # This glob finds images in any subdirectory's 'images' folder, like 'train/images', 'val/images'
-            alt_paths = sorted([p for ext in fmts for p in glob.glob(os.path.join(self.dataset_dir, '* ', 'images', '**', f'*.{ext}'), recursive=True)])
-            if alt_paths:
-                self.image_paths = alt_paths
-                print("[Info] Detected alternative dataset structure (e.g., train/images).")
-
-        if not self.image_paths:
-            print(f"[Error] No images found in standard ('images/...') or alternative ('*/images/...') structures.")
+            print(f"[Error] No images found within any 'images' subdirectory in '{self.dataset_dir}'.")
+            print("Please ensure your dataset follows a standard structure, such as:")
+            print("1. dataset/images/{train,val}/...")
+            print("2. dataset/{train,val}/images/...")
             return False
 
+        print(f"[Info] Found {len(self.image_paths)} images.")
         rev_path = os.path.join(self.dataset_dir, 'review_list.txt')
         if os.path.exists(rev_path):
             self.review_list = {ln.strip() for ln in open(rev_path, 'r') if ln.strip()}
@@ -418,17 +422,21 @@ def auto_label_dataset(dataset_path, weights_path, config):
 
     # --- Flexible Image Path Discovery ---
     image_formats = workflow_params.get('image_format', 'png,jpg,jpeg').split(',')
-    # Attempt 1: Standard structure (e.g., dataset/images/train/...)
-    paths = sorted([p for fmt in image_formats for p in glob.glob(os.path.join(dataset_path, 'images', '**', f'*.{fmt}'), recursive=True)])
-    # Attempt 2: Alternative structure (e.g., dataset/train/images/...)
-    if not paths:
-        alt_paths = sorted([p for fmt in image_formats for p in glob.glob(os.path.join(dataset_path, '* ', 'images', '**', f'*.{fmt}'), recursive=True)])
-        if alt_paths:
-            paths = alt_paths
-            print("[Info] Detected alternative dataset structure for auto-labeling.")
+    print("[Info] Searching for images in all subdirectories for auto-labeling...")
+    
+    all_image_files = sorted([
+        p for fmt in image_formats
+        for p in glob.glob(os.path.join(dataset_path, '**', f'*.{fmt}'), recursive=True)
+    ])
 
+    sep = os.path.sep
+    paths = [
+        path for path in all_image_files
+        if f'{sep}images{sep}' in path
+    ]
+    
     if not paths:
-        print("[Warning] No images found to label in any known structure.")
+        print("[Warning] No images found to label within any 'images' subdirectory.")
         return
 
     print(f"Found {len(paths)} images to process...")

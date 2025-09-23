@@ -252,9 +252,26 @@ def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
         return False
 
     subsets = list(ratios.keys())
-    for sub in subsets:
-        os.makedirs(os.path.join(images_dir, sub), exist_ok=True)
-        os.makedirs(os.path.join(labels_dir, sub), exist_ok=True)
+
+    # 사용자로부터 디렉토리 구조 선택 (ratios에 따라 동적으로 프롬프트 변경)
+    example_subsets = ",".join(subsets)
+    print("\nPlease choose the desired directory structure for splitting the dataset:")
+    print(f"1: images/{{{example_subsets}}}, labels/{{{example_subsets}}}")
+    print(f"2: {{{example_subsets}}}/images, {{{example_subsets}}}/labels")
+    choice = input("Enter your choice (1 or 2): ")
+    while choice not in ['1', '2']:
+        choice = input("Invalid input. Please enter 1 or 2: ")
+    structure_type = int(choice)
+    
+    # 선택된 구조에 따라 디렉토리 생성
+    if structure_type == 1:
+        for sub in subsets:
+            os.makedirs(os.path.join(images_dir, sub), exist_ok=True)
+            os.makedirs(os.path.join(labels_dir, sub), exist_ok=True)
+    else:  # structure_type == 2
+        for sub in subsets:
+            os.makedirs(os.path.join(dataset_dir, sub, 'images'), exist_ok=True)
+            os.makedirs(os.path.join(dataset_dir, sub, 'labels'), exist_ok=True)
 
     image_paths = [p for fmt in image_formats for p in glob.glob(os.path.join(images_dir, f'*.{fmt}'))]
     valid_pairs = [p for p in image_paths if os.path.exists(get_label_path(p))]
@@ -270,9 +287,17 @@ def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
 
     def move_pair(file_path, subset):
         try:
-            shutil.move(file_path, os.path.join(images_dir, subset, os.path.basename(file_path)))
             label_path = get_label_path(file_path)
-            shutil.move(label_path, os.path.join(labels_dir, subset, os.path.basename(label_path)))
+            # 선택된 구조에 따라 파일 이동 경로 설정
+            if structure_type == 1:
+                img_dest = os.path.join(images_dir, subset, os.path.basename(file_path))
+                lbl_dest = os.path.join(labels_dir, subset, os.path.basename(label_path))
+            else:  # structure_type == 2
+                img_dest = os.path.join(dataset_dir, subset, 'images', os.path.basename(file_path))
+                lbl_dest = os.path.join(dataset_dir, subset, 'labels', os.path.basename(label_path))
+            
+            shutil.move(file_path, img_dest)
+            shutil.move(label_path, lbl_dest)
         except FileNotFoundError:
             print(f"[Warning] Could not find image or label for: {os.path.basename(file_path)}")
 
@@ -290,10 +315,26 @@ def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
             move_pair(p, subset)
         start_index = end_index
 
+    # 선택된 구조에 따라 YAML 파일 경로 설정
     yaml_path = os.path.join(dataset_dir, 'data.yaml')
-    data = {'path': os.path.abspath(dataset_dir), 'train': os.path.join('images', 'train'), 'val': os.path.join('images', 'val')}
-    if 'test' in subsets: data['test'] = os.path.join('images', 'test')
+    if structure_type == 1:
+        train_path = os.path.join('images', 'train')
+        val_path = os.path.join('images', 'val')
+        test_path = os.path.join('images', 'test') if 'test' in subsets else None
+    else:  # structure_type == 2
+        train_path = os.path.join('train', 'images')
+        val_path = os.path.join('val', 'images')
+        test_path = os.path.join('test', 'images') if 'test' in subsets else None
+
+    data = {
+        'path': os.path.abspath(dataset_dir),
+        'train': train_path,
+        'val': val_path
+    }
+    if test_path:
+        data['test'] = test_path
     data['names'] = [n for _, n in sorted(class_names.items())]
+    
     with open(yaml_path, 'w') as f:
         yaml.dump(data, f, sort_keys=False, default_flow_style=False)
 

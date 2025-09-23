@@ -137,22 +137,72 @@ def display_main_ui():
 
     print("-" * 80)
 
-def get_dataset_from_user(prompt="Select a dataset to use (by number)"):
-    if not registered_datasets:
-        print("\n[Error] No datasets registered.")
-        return None
-
+def _prompt_for_new_dataset_path():
+    """Helper function to prompt for, validate, and register a new dataset path."""
+    print_cancel_message()
     while True:
-        choice_str = get_input(prompt)
+        path_str = get_sanitized_path_input("Enter the absolute path to the dataset directory")
+
+        if path_str == 'c':
+            return 'c'
+        if not path_str:
+            print("[Error] Path cannot be empty.")
+            continue
+
+        path = Path(path_str)
+        if path.is_dir():
+            abs_path = str(path.resolve())
+            if abs_path not in registered_datasets:
+                registered_datasets.append(abs_path)
+                print(f"\n[Success] Dataset '{abs_path}' has been registered and selected.")
+            else:
+                print(f"\n[Info] Dataset '{abs_path}' was already registered. Selecting it.")
+            return abs_path
+        else:
+            print(f"\n[Error] The path '{path_str}' is not a valid directory. Please try again.")
+
+def get_dataset_from_user(prompt="Select a dataset to use (by number)"):
+    # Case 1: No datasets are registered yet.
+    if not registered_datasets:
+        print("\n[Info] No datasets are registered yet. Please provide a path directly.")
+        return _prompt_for_new_dataset_path()
+
+    # Case 2: Datasets exist, prompt for selection.
+    while True:
+        # Update prompt to include 'add' instruction
+        full_prompt = f"{prompt} or enter 'add' for a new path"
+        choice_str = get_input(full_prompt)
+        
         if choice_str == 'c': return 'c'
+
+        if choice_str.lower() == 'add':
+            print("\n--- Add New Dataset Path ---")
+            new_path = _prompt_for_new_dataset_path()
+            # If a new path was successfully added, return it for immediate use.
+            # If the user cancelled ('c'), the loop will continue after returning 'c'.
+            if new_path != 'c':
+                return new_path
+            # If user cancels adding a new path, we just re-prompt for selection.
+            # We can't return 'c' here as it would cancel the parent operation.
+            # Instead, we let the loop start over.
+            print("\nReturning to dataset selection...")
+            # Re-display the (potentially updated) list
+            print("\n--- Registered Datasets ---")
+            for i, path in enumerate(registered_datasets, 1):
+                print(f"  <{i}> {path}")
+            print("-" * 27)
+            continue # Re-start the selection loop
+
         try:
             choice_int = int(choice_str)
+            
+            # Option A: User selects an existing dataset from the list.
             if 1 <= choice_int <= len(registered_datasets):
                 return registered_datasets[choice_int - 1]
             else:
-                print(f"[Error] Invalid selection.")
-        except (ValueError, IndexError):
-            print("[Error] Invalid input. Please enter a number.")
+                print(f"[Error] Invalid selection. Please enter a number between 1 and {len(registered_datasets)}.")
+        except ValueError:
+            print("[Error] Invalid input. Please enter a number from the list or 'add'.")
 
 def get_multiple_datasets_from_user():
     if not registered_datasets:
@@ -182,22 +232,14 @@ def get_multiple_datasets_from_user():
 def add_dataset_directory():
     print("\n--- Add New Dataset Directory ---")
     print("Registers a new dataset directory path for use in other toolkit functions.")
-    print_cancel_message()
+    
+    # Use the new helper function for consistency. 
+    # The return value isn't needed here, but it reuses the same validated input logic.
+    new_path = _prompt_for_new_dataset_path()
+    if new_path != 'c':
+        # The helper function already prints success, so we just wait for user input to return.
+        pass
 
-    path_str = get_sanitized_path_input("Enter the absolute path to the dataset directory")
-    if path_str == 'c' or not path_str: return
-
-    path = Path(path_str)
-
-    if path.is_dir():
-        abs_path = str(path.resolve())
-        if abs_path not in registered_datasets:
-            registered_datasets.append(abs_path)
-            print(f"\n[Success] Dataset '{abs_path}' added.")
-        else:
-            print(f"\n[Info] Dataset '{abs_path}' is already registered.")
-    else:
-        print(f"\n[Error] The path '{path_str}' is not a valid directory.")
 
 def run_extract_from_bag():
     print("\n--- Extract Images from ROS Bag ---")
