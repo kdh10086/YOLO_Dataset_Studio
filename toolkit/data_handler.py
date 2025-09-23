@@ -39,7 +39,7 @@ class RosBagPlayer:
         import rclpy
         from sensor_msgs.msg import Image
         from cv_bridge import CvBridge
-        from rosbag2_interfaces.srv import Pause, Resume, TogglePaused
+        from rosbag2_interfaces.srv import TogglePaused
 
         self.rclpy = rclpy
         if not self.rclpy.ok():
@@ -50,21 +50,13 @@ class RosBagPlayer:
         self.latest_frame = None
         self.frame_lock = threading.Lock()
         self.bag_process = None
-        self.is_paused = True
+        self.is_paused = True  # Start in paused state
 
-        # Store service types as instance attributes to be accessible by other methods
-        self.PauseSrv = Pause
         self.TogglePausedSrv = TogglePaused
-
-        # Create a subscriber to receive the images
         self.subscription = self.node.create_subscription(
             Image, image_topic, self._image_callback, 10)
-
-        # Create clients to control the player node
         self.toggle_client = self.node.create_client(self.TogglePausedSrv, '/rosbag2_player/toggle_paused')
-        self.pause_client = self.node.create_client(self.PauseSrv, '/rosbag2_player/pause')
         
-        # Start the ROS2 node spinning in a separate thread
         self.ros_thread = threading.Thread(target=self.rclpy.spin, args=(self.node,), daemon=True)
         self.ros_thread.start()
         print("ROS2 subscriber and service client node started.")
@@ -74,18 +66,17 @@ class RosBagPlayer:
             self.latest_frame = self.bridge.imgmsg_to_cv2(msg, "bgr8")
 
     def play_bag(self, bag_path):
-        command = ['ros2', 'bag', 'play', bag_path]
+        # Use the built-in '--start-paused' option for reliable startup
+        command = ['ros2', 'bag', 'play', bag_path, '--start-paused']
         print(f"Executing command: {' '.join(command)}")
         try:
             self.bag_process = subprocess.Popen(command)
-            if not self.pause_client.wait_for_service(timeout_sec=5.0):
-                print("[Error] Could not connect to /rosbag2_player/pause service.")
+            if not self.toggle_client.wait_for_service(timeout_sec=5.0):
+                print("[Error] Could not connect to /rosbag2_player/toggle_paused service.")
                 self.cleanup()
                 return False
             
-            # Immediately pause it via a service call using the pre-made client
-            self.pause_client.call_async(self.PauseSrv.Request())
-            print("Player started and immediately paused via service call.")
+            print("Player started in paused state.")
             return True
         except FileNotFoundError:
             print("[Error] 'ros2' command not found. Is ROS2 sourced correctly?")
@@ -144,17 +135,48 @@ def extract_images_from_rosbag(rosbag_dir, output_dir, image_topic, image_format
     saved_count = 0
 
     if mode == 0:
-        # (The non-interactive code block is unchanged and remains here)
         print("Running non-interactive extraction...")
-        # ...
+        reader = SequentialReader()
+        try:
+            reader.open(StorageOptions(uri=rosbag_dir, storage_id='sqlite3'), ConverterOptions(input_serialization_format='cdr', output_serialization_format='cdr'))
+        except Exception as e:
+            print(f"[Error] Failed to open ROS Bag: {e}")
+            return False
+        topic_type_str = _get_topic_type(rosbag_dir, image_topic)
+        if not topic_type_str:
+            print(f"[Error] Topic '{image_topic}' not found in the bag file.")
+            return False
+        msg_type = get_message(topic_type_str)
+        bridge = CvBridge()
+        total_messages = 0
+        metadata_path = os.path.join(rosbag_dir, 'metadata.yaml')
+        if os.path.exists(metadata_path):
+            with open(metadata_path, 'r') as f:
+                metadata = yaml.safe_load(f)['rosbag2_bagfile_information']
+            for topic_info in metadata['topics_with_message_count']:
+                if topic_info['topic_metadata']['name'] == image_topic:
+                    total_messages = topic_info['message_count']
+        
+        pbar = tqdm(total=total_messages, desc="Extracting from Bag")
+        for topic, data, t in reader:
+            if topic == image_topic:
+                try:
+                    cv_image = bridge.imgmsg_to_cv2(deserialize_message(data, msg_type), "bgr8")
+                    fname = f"{start_index:06d}.{image_formats[0]}"
+                    cv2.imwrite(os.path.join(images_dir, fname), cv_image)
+                    saved_count += 1
+                    start_index += 1
+                except Exception as e:
+                    print(f"\n[Warning] Could not process a message: {e}")
+                finally:
+                    if total_messages > 0: pbar.update(1)
+        if total_messages > 0: pbar.close()
+        print(f"\nExtraction finished. {saved_count} images saved.")
         return True
 
     # --- Interactive extraction (modes 1 and 2) ---
     player = RosBagPlayer(image_topic)
-    if not player.play_bag(rosbag_dir):
-        player.cleanup()
-        return False
-
+    
     is_saving, save_single = False, False
 
     def mouse_callback(event, x, y, flags, param):
@@ -162,7 +184,7 @@ def extract_images_from_rosbag(rosbag_dir, output_dir, image_topic, image_format
         if event == cv2.EVENT_LBUTTONDOWN:
             if mode == 1: save_single = True
             elif mode == 2: is_saving = not is_saving
-
+    
     cv2.namedWindow("ROS2 Bag Player")
     cv2.setMouseCallback("ROS2 Bag Player", mouse_callback)
     print("\n--- Interactive Player Controls ---")
@@ -170,42 +192,43 @@ def extract_images_from_rosbag(rosbag_dir, output_dir, image_topic, image_format
     print("  Mouse Click: Save image (single or toggle range based on mode)")
     print("  Q: Quit")
     print("---------------------------------")
-    
-    print("Waiting for the first image from the bag...")
-    while player.get_frame() is None:
-        if player.bag_process and player.bag_process.poll() is not None:
-            print("[Error] ros2 bag play process terminated unexpectedly.")
-            player.cleanup()
-            cv2.destroyAllWindows()
-            return False
-        time.sleep(0.1)
-    
-    print("First frame received. Player is ready (paused).")
-    
+
+    if not player.play_bag(rosbag_dir):
+        player.cleanup()
+        cv2.destroyAllWindows()
+        return False
+
     while True:
         if player.bag_process and player.bag_process.poll() is not None:
             print("\nROS2 bag play process has ended.")
             break
             
         frame = player.get_frame()
+
+        display_image = None
         if frame is None:
-            key = cv2.waitKey(30) & 0xFF
-            if key == ord('q'): break
-            continue
+            # If no frame has been received yet, show a placeholder
+            display_image = np.zeros((480, 640, 3), dtype=np.uint8)
+            text = "Press SPACE to play"
+            text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)[0]
+            text_x = (display_image.shape[1] - text_size[0]) // 2
+            text_y = (display_image.shape[0] + text_size[1]) // 2
+            cv2.putText(display_image, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        else:
+            # A frame has been received, use it
+            if (mode == 1 and save_single) or (mode == 2 and is_saving):
+                fname = f"{start_index:06d}.{image_formats[0]}"
+                cv2.imwrite(os.path.join(images_dir, fname), frame)
+                saved_count += 1
+                start_index += 1
+                save_single = False
 
-        if (mode == 1 and save_single) or (mode == 2 and is_saving):
-            fname = f"{start_index:06d}.{image_formats[0]}"
-            cv2.imwrite(os.path.join(images_dir, fname), frame)
-            saved_count += 1
-            start_index += 1
-            save_single = False
-
-        display_image = frame.copy()
-        if is_saving and mode == 2:
-            cv2.circle(display_image, (30, 30), 20, (0, 0, 255), -1)
-            cv2.putText(display_image, "REC", (60, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-        if player.is_paused:
-            cv2.putText(display_image, "PAUSED", (display_image.shape[1] - 150, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            display_image = frame.copy()
+            if is_saving and mode == 2:
+                cv2.circle(display_image, (30, 30), 20, (0, 0, 255), -1)
+                cv2.putText(display_image, "REC", (60, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            if player.is_paused:
+                cv2.putText(display_image, "PAUSED", (display_image.shape[1] - 150, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
         cv2.imshow("ROS2 Bag Player", display_image)
 
@@ -220,4 +243,199 @@ def extract_images_from_rosbag(rosbag_dir, output_dir, image_topic, image_format
     print(f"\nExtraction finished. {saved_count} images saved.")
     return True
 
-# ... (rest of the file: split_dataset_for_training, merge_datasets, etc. remains unchanged) ...
+def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
+    """Splits a dataset into multiple subsets based on given ratios."""
+    images_dir = os.path.join(dataset_dir, 'images')
+    labels_dir = os.path.join(dataset_dir, 'labels')
+    if not os.path.isdir(images_dir) or not os.path.isdir(labels_dir):
+        print(f"[Error] 'images' or 'labels' directory not found in '{dataset_dir}'.")
+        return False
+
+    subsets = list(ratios.keys())
+    for sub in subsets:
+        os.makedirs(os.path.join(images_dir, sub), exist_ok=True)
+        os.makedirs(os.path.join(labels_dir, sub), exist_ok=True)
+
+    image_paths = [p for fmt in image_formats for p in glob.glob(os.path.join(images_dir, f'*.{fmt}'))]
+    valid_pairs = [p for p in image_paths if os.path.exists(get_label_path(p))]
+    if not valid_pairs:
+        print("[Warning] No valid image-label pairs found to split.")
+        return False
+    random.shuffle(valid_pairs)
+    total_ratio = sum(ratios.values())
+    if total_ratio <= 0:
+        print("[Error] Sum of ratios must be positive.")
+        return False
+    normalized_ratios = {k: v / total_ratio for k, v in ratios.items()}
+
+    def move_pair(file_path, subset):
+        try:
+            shutil.move(file_path, os.path.join(images_dir, subset, os.path.basename(file_path)))
+            label_path = get_label_path(file_path)
+            shutil.move(label_path, os.path.join(labels_dir, subset, os.path.basename(label_path)))
+        except FileNotFoundError:
+            print(f"[Warning] Could not find image or label for: {os.path.basename(file_path)}")
+
+    start_index = 0
+    num_files = len(valid_pairs)
+    for i, (subset, ratio) in enumerate(normalized_ratios.items()):
+        if i == len(normalized_ratios) - 1:
+            end_index = num_files
+        else:
+            end_index = start_index + int(num_files * ratio)
+        
+        files_to_move = valid_pairs[start_index:end_index]
+        print(f"Moving {len(files_to_move)} pairs to '{subset}'...")
+        for p in tqdm(files_to_move, desc=f"Moving {subset} files"):
+            move_pair(p, subset)
+        start_index = end_index
+
+    yaml_path = os.path.join(dataset_dir, 'data.yaml')
+    data = {'path': os.path.abspath(dataset_dir), 'train': os.path.join('images', 'train'), 'val': os.path.join('images', 'val')}
+    if 'test' in subsets: data['test'] = os.path.join('images', 'test')
+    data['names'] = [n for _, n in sorted(class_names.items())]
+    with open(yaml_path, 'w') as f:
+        yaml.dump(data, f, sort_keys=False, default_flow_style=False)
+
+    print("Dataset split complete.")
+    return True
+
+def merge_datasets(input_dirs, output_dir, image_formats, exist_ok=False, strategy='flatten', base_dataset=None):
+    """Merges multiple datasets using either a 'flatten' or 'structured' strategy."""
+    if os.path.exists(output_dir) and not exist_ok:
+        print(f"[Error] Output directory already exists: {output_dir}")
+        return False
+    if os.path.exists(output_dir): shutil.rmtree(output_dir)
+    os.makedirs(output_dir)
+
+    if strategy == 'flatten':
+        print("\nRunning Flatten Merge...")
+        out_img = os.path.join(output_dir, 'images')
+        out_lbl = os.path.join(output_dir, 'labels')
+        os.makedirs(out_img); os.makedirs(out_lbl)
+        
+        all_images = [p for d in input_dirs for fmt in image_formats for p in glob.glob(os.path.join(d, '**', f'*.{fmt}'), recursive=True)]
+        all_images.sort()
+        
+        c = 0
+        for img_path in tqdm(all_images, desc="Merging and flattening"):
+            lbl_path = get_label_path(img_path)
+            if os.path.exists(lbl_path):
+                ext = os.path.splitext(img_path)[1]
+                new_base = f"{c:06d}"
+                shutil.copy2(img_path, os.path.join(out_img, new_base + ext))
+                shutil.copy2(lbl_path, os.path.join(out_lbl, new_base + '.txt'))
+                c += 1
+        print(f"\nFlatten merge complete. {c} image-label pairs saved.")
+        return True
+
+    elif strategy == 'structured':
+        if not base_dataset or base_dataset not in input_dirs:
+            print("[Error] A valid base dataset must be selected for structured merge.")
+            return False
+        
+        print(f"\nRunning Structured Merge based on '{os.path.basename(base_dataset)}'...")
+        base_path = Path(base_dataset)
+        base_images = [p for fmt in image_formats for p in base_path.glob(f'**/*.{fmt}')]
+        rel_img_subdirs = sorted(list(set([p.relative_to(base_path).parent for p in base_images])))
+
+        if not rel_img_subdirs:
+            print(f"[Error] No image subdirectories found in the base dataset: {base_dataset}")
+            return False
+
+        print(f"Base structure detected: {[str(p) for p in rel_img_subdirs]}")
+        total_saved_pairs = 0
+        for rel_img_subdir in rel_img_subdirs:
+            out_img_subdir = Path(output_dir) / rel_img_subdir
+            rel_lbl_subdir = Path(str(rel_img_subdir).replace('images', 'labels', 1))
+            out_lbl_subdir = Path(output_dir) / rel_lbl_subdir
+            out_img_subdir.mkdir(parents=True, exist_ok=True)
+            out_lbl_subdir.mkdir(parents=True, exist_ok=True)
+            file_counter = 0
+            for source_dir in input_dirs:
+                current_scan_dir = Path(source_dir) / rel_img_subdir
+                if not current_scan_dir.is_dir(): continue
+                images_in_subdir = [p for fmt in image_formats for p in current_scan_dir.glob(f'*.{fmt}')]
+                images_in_subdir.sort()
+                for img_path in images_in_subdir:
+                    lbl_path = get_label_path(str(img_path))
+                    if os.path.exists(lbl_path):
+                        ext = img_path.suffix
+                        new_base = f"{file_counter:06d}"
+                        shutil.copy2(str(img_path), out_img_subdir / (new_base + ext))
+                        shutil.copy2(lbl_path, out_lbl_subdir / (new_base + '.txt'))
+                        file_counter += 1
+            print(f" - Merged {file_counter} pairs into '{rel_img_subdir}'")
+            total_saved_pairs += file_counter
+        print(f"\nStructured merge complete. {total_saved_pairs} total image-label pairs saved.")
+        return True
+    
+    else:
+        print(f"[Error] Unknown merge strategy: '{strategy}'")
+        return False
+
+def get_all_image_data(source_dir, image_formats):
+    """
+    Finds all images in a dataset, supporting both 'images/train' and 'train/images' structures.
+    Returns a list of tuples: (image_path, label_path_or_None).
+    """
+    source_path = Path(source_dir)
+    image_paths = []
+    for fmt in image_formats:
+        image_paths.extend(source_path.glob(f'**/*.{fmt}'))
+    image_paths = [p for p in image_paths if 'images' in p.parts]
+    if not image_paths: return []
+    all_image_data = []
+    for img_path in sorted(image_paths):
+        label_path = get_label_path(str(img_path))
+        if os.path.exists(label_path):
+            all_image_data.append((str(img_path), label_path))
+        else:
+            all_image_data.append((str(img_path), None))
+    return all_image_data
+
+def sample_dataset(source_dir, output_dir, sample_ratio, image_formats, exist_ok=False, method='random'):
+    """Creates a new, smaller dataset by sampling from a source dataset."""
+    if os.path.exists(output_dir) and not exist_ok:
+        print(f"[Error] Output directory '{output_dir}' already exists.")
+        return
+    if os.path.exists(output_dir): shutil.rmtree(output_dir)
+
+    all_image_data = get_all_image_data(source_dir, image_formats)
+    if not all_image_data:
+        print(f"[Error] No valid images found in {source_dir}.")
+        return
+
+    num_samples = max(1, int(len(all_image_data) * sample_ratio))
+    print(f"Sampling {num_samples} items ({sample_ratio*100:.1f}% of {len(all_image_data)} total images).")
+
+    if method == 'random':
+        sampled_data = random.sample(all_image_data, num_samples)
+    elif method == 'uniform':
+        indices = np.round(np.linspace(0, len(all_image_data) - 1, num_samples)).astype(int)
+        sampled_data = [all_image_data[i] for i in np.unique(indices)]
+    else:
+        print(f"[Error] Unknown sampling method: {method}")
+        return
+
+    for img_path_str, label_path_str in tqdm(sampled_data, desc="Copying sampled data"):
+        img_path = Path(img_path_str)
+        try:
+            parts = img_path.parts
+            images_index = parts.index('images')
+            relative_structure = Path(*parts[images_index:])
+        except ValueError:
+            relative_structure = Path('images') / img_path.name
+        
+        output_img_path = Path(output_dir) / relative_structure
+        output_img_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(img_path, output_img_path)
+
+        if label_path_str:
+            label_path = Path(label_path_str)
+            label_relative_structure = Path(str(relative_structure).replace('images', 'labels', 1))
+            output_label_path = Path(output_dir) / label_relative_structure
+            output_label_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(label_path, output_label_path)
+    
+    print("\nDataset sampling complete.")
