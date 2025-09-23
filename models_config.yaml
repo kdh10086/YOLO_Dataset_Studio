@@ -15,15 +15,9 @@ model_configurations:
   # The key is the class ID (integer) and the value is the class name (string).
   # This must be consistent across all phases.
   classes:
-    0: 'blue cone'
-    1: 'blue corn'
-    2: 'crimson cone'
-    3: 'green'
-    4: 'yellow cone'
-    5: 'yellow corn'
-    6: 'green light'
-    7: 'red light'
-    8: 'unknown light'
+    0: 'green light'
+    1: 'red light'
+    2: 'unknown light'
 
   # Configuration for the Teacher model, which is used to generate pseudo-labels.
   teacher_model_config:

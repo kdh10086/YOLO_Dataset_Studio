@@ -61,9 +61,18 @@ def get_input(prompt, default=None):
 
     return user_input or default if default is not None else user_input
 
+def get_sanitized_path_input(prompt, default=None):
+    """Gets a path from user input, automatically stripping quotes."""
+    path_str = get_input(prompt, default)
+    if path_str in ['c', '', None]:
+        return path_str
+    return path_str.replace('\'', '').replace('\"', '')
+
+
 # --- Global State ---
 registered_datasets = []
 config = {}
+BASE_DATASET_PATH = "datasets" # Base directory for new datasets
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -175,10 +184,9 @@ def add_dataset_directory():
     print("Registers a new dataset directory path for use in other toolkit functions.")
     print_cancel_message()
 
-    path_str = get_input("Enter the absolute path to the dataset directory")
+    path_str = get_sanitized_path_input("Enter the absolute path to the dataset directory")
     if path_str == 'c' or not path_str: return
 
-    path_str = path_str.replace('\'', '').replace('\"', '')
     path = Path(path_str)
 
     if path.is_dir():
@@ -196,12 +204,19 @@ def run_extract_from_bag():
     print("Extracts images from a ROS2 bag file. Can run in fully automatic or interactive modes.")
     print_cancel_message()
 
-    rosbag_dir = get_input("Enter path to ROS Bag directory")
+    rosbag_dir = get_sanitized_path_input("Enter path to ROS Bag directory")
     if rosbag_dir == 'c' or not rosbag_dir: return
     if not os.path.isdir(rosbag_dir): print(f"\n[Error] Directory not found: {rosbag_dir}"); return
 
-    output_dir = get_input("Enter path for output dataset")
-    if output_dir == 'c' or not output_dir: return
+    dataset_name = get_input("Enter a name for the new output dataset")
+    if dataset_name == 'c' or not dataset_name: return
+
+    os.makedirs(BASE_DATASET_PATH, exist_ok=True)
+    output_dir = os.path.join(BASE_DATASET_PATH, dataset_name)
+    print(f"-> Output will be saved to: {output_dir}")
+
+    topic = get_input("Enter the ROS2 image topic to extract", default="/camera/image_raw")
+    if topic == 'c' or not topic: return
 
     mode = 0
     if GUI_ENABLED:
@@ -215,9 +230,7 @@ def run_extract_from_bag():
         print("\n[Info] GUI not available. Extracting all images automatically (Mode 0).")
 
     workflow_params = config.get('workflow_parameters', {})
-    topic = workflow_params.get('ros2_image_topic')
     fmts = workflow_params.get('image_format', 'png,jpg,jpeg').split(',')
-    if not topic: print("\n[Error] 'ros2_image_topic' not defined in models_config.yaml."); return
 
     data_handler.extract_images_from_rosbag(rosbag_dir, output_dir, topic, fmts, mode)
 
@@ -393,7 +406,7 @@ def run_merge_datasets():
         print("The structure of this dataset will be used for the merged output.")
         for i, path in enumerate(input_dirs, 1):
             print(f"  <{i}> {path}")
-        
+
         while True:
             base_choice_str = get_input("Select a base dataset (by number)")
             if base_choice_str == 'c': return
@@ -408,8 +421,12 @@ def run_merge_datasets():
                 print("[Error] Invalid input. Please enter a number.")
 
     # --- Get Output Directory ---
-    output_dir = get_input("\nEnter path for the new merged dataset")
-    if output_dir == 'c' or not output_dir: return
+    dataset_name = get_input("\nEnter a name for the new merged dataset")
+    if dataset_name == 'c' or not dataset_name: return
+
+    os.makedirs(BASE_DATASET_PATH, exist_ok=True)
+    output_dir = os.path.join(BASE_DATASET_PATH, dataset_name)
+    print(f"-> Merged dataset will be saved to: {output_dir}")
 
     exist_ok_str = get_input(f"If '{output_dir}' exists, overwrite? (y/N)", default='n')
     if exist_ok_str == 'c': return
@@ -426,8 +443,12 @@ def run_random_sampler():
     source_dir = get_dataset_from_user("Select a source dataset")
     if source_dir == 'c' or not source_dir: return
 
-    output_dir = get_input("Enter path for the new sampled dataset")
-    if output_dir == 'c' or not output_dir: return
+    dataset_name = get_input("Enter a name for the new sampled dataset")
+    if dataset_name == 'c' or not dataset_name: return
+    
+    os.makedirs(BASE_DATASET_PATH, exist_ok=True)
+    output_dir = os.path.join(BASE_DATASET_PATH, dataset_name)
+    print(f"-> Sampled dataset will be saved to: {output_dir}")
 
     fmts = config.get('workflow_parameters', {}).get('image_format', 'png,jpg,jpeg').split(',')
 
@@ -469,6 +490,9 @@ def run_random_sampler():
 def main():
     global config
     check_environment()
+
+    # Create the base datasets directory on startup if it doesn't exist
+    os.makedirs(BASE_DATASET_PATH, exist_ok=True)
 
     try:
         with open('models_config.yaml', 'r') as f: config = yaml.safe_load(f)
