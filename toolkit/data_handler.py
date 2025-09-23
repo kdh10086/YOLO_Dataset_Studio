@@ -244,36 +244,39 @@ def extract_images_from_rosbag(rosbag_dir, output_dir, image_topic, image_format
     return True
 
 def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
-    """Splits a dataset into multiple subsets based on given ratios."""
-    images_dir = os.path.join(dataset_dir, 'images')
-    labels_dir = os.path.join(dataset_dir, 'labels')
-    if not os.path.isdir(images_dir) or not os.path.isdir(labels_dir):
-        print(f"[Error] 'images' or 'labels' directory not found in '{dataset_dir}'.")
+    """Splits a dataset into multiple subsets based on given ratios, supporting flexible structures."""
+    # Robustly find all images within any 'images' subdirectory
+    all_image_files = sorted([
+        p for ext in image_formats
+        for p in glob.glob(os.path.join(dataset_dir, '**', f'*.{ext}'), recursive=True)
+    ])
+    sep = os.path.sep
+    image_paths = [path for path in all_image_files if f'{sep}images{sep}' in path]
+
+    if not image_paths:
+        print(f"[Error] No images found within any 'images' subdirectory in '{dataset_dir}'.")
         return False
 
     subsets = list(ratios.keys())
-
-    # 사용자로부터 디렉토리 구조 선택 (ratios에 따라 동적으로 프롬프트 변경)
     example_subsets = ",".join(subsets)
-    print("\nPlease choose the desired directory structure for splitting the dataset:")
-    print(f"1: images/{{{example_subsets}}}, labels/{{{example_subsets}}}")
-    print(f"2: {{{example_subsets}}}/images, {{{example_subsets}}}/labels")
+    print("\nPlease choose the desired output directory structure:")
+    print(f"1: {dataset_dir}/images/{{{example_subsets}}}, {dataset_dir}/labels/{{{example_subsets}}}")
+    print(f"2: {dataset_dir}/{{{example_subsets}}}/images, {dataset_dir}/{{{example_subsets}}}/labels")
     choice = input("Enter your choice (1 or 2): ")
     while choice not in ['1', '2']:
         choice = input("Invalid input. Please enter 1 or 2: ")
     structure_type = int(choice)
     
-    # 선택된 구조에 따라 디렉토리 생성
+    # Create output directories based on chosen structure
     if structure_type == 1:
         for sub in subsets:
-            os.makedirs(os.path.join(images_dir, sub), exist_ok=True)
-            os.makedirs(os.path.join(labels_dir, sub), exist_ok=True)
+            os.makedirs(os.path.join(dataset_dir, 'images', sub), exist_ok=True)
+            os.makedirs(os.path.join(dataset_dir, 'labels', sub), exist_ok=True)
     else:  # structure_type == 2
         for sub in subsets:
             os.makedirs(os.path.join(dataset_dir, sub, 'images'), exist_ok=True)
             os.makedirs(os.path.join(dataset_dir, sub, 'labels'), exist_ok=True)
 
-    image_paths = [p for fmt in image_formats for p in glob.glob(os.path.join(images_dir, f'*.{fmt}'))]
     valid_pairs = [p for p in image_paths if os.path.exists(get_label_path(p))]
     if not valid_pairs:
         print("[Warning] No valid image-label pairs found to split.")
@@ -288,10 +291,9 @@ def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
     def move_pair(file_path, subset):
         try:
             label_path = get_label_path(file_path)
-            # 선택된 구조에 따라 파일 이동 경로 설정
             if structure_type == 1:
-                img_dest = os.path.join(images_dir, subset, os.path.basename(file_path))
-                lbl_dest = os.path.join(labels_dir, subset, os.path.basename(label_path))
+                img_dest = os.path.join(dataset_dir, 'images', subset, os.path.basename(file_path))
+                lbl_dest = os.path.join(dataset_dir, 'labels', subset, os.path.basename(label_path))
             else:  # structure_type == 2
                 img_dest = os.path.join(dataset_dir, subset, 'images', os.path.basename(file_path))
                 lbl_dest = os.path.join(dataset_dir, subset, 'labels', os.path.basename(label_path))
@@ -304,10 +306,7 @@ def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
     start_index = 0
     num_files = len(valid_pairs)
     for i, (subset, ratio) in enumerate(normalized_ratios.items()):
-        if i == len(normalized_ratios) - 1:
-            end_index = num_files
-        else:
-            end_index = start_index + int(num_files * ratio)
+        end_index = num_files if i == len(normalized_ratios) - 1 else start_index + int(num_files * ratio)
         
         files_to_move = valid_pairs[start_index:end_index]
         print(f"Moving {len(files_to_move)} pairs to '{subset}'...")
@@ -315,7 +314,7 @@ def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
             move_pair(p, subset)
         start_index = end_index
 
-    # 선택된 구조에 따라 YAML 파일 경로 설정
+    # Create data.yaml based on chosen structure
     yaml_path = os.path.join(dataset_dir, 'data.yaml')
     if structure_type == 1:
         train_path = os.path.join('images', 'train')
@@ -327,13 +326,10 @@ def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
         test_path = os.path.join('test', 'images') if 'test' in subsets else None
 
     data = {
-        'path': os.path.abspath(dataset_dir),
-        'train': train_path,
-        'val': val_path
+        'path': os.path.abspath(dataset_dir), 'train': train_path, 'val': val_path,
+        'names': [n for _, n in sorted(class_names.items())]
     }
-    if test_path:
-        data['test'] = test_path
-    data['names'] = [n for _, n in sorted(class_names.items())]
+    if test_path: data['test'] = test_path
     
     with open(yaml_path, 'w') as f:
         yaml.dump(data, f, sort_keys=False, default_flow_style=False)
@@ -349,14 +345,15 @@ def merge_datasets(input_dirs, output_dir, image_formats, exist_ok=False, strate
     if os.path.exists(output_dir): shutil.rmtree(output_dir)
     os.makedirs(output_dir)
 
+    sep = os.path.sep
+
     if strategy == 'flatten':
         print("\nRunning Flatten Merge...")
-        out_img = os.path.join(output_dir, 'images')
-        out_lbl = os.path.join(output_dir, 'labels')
-        os.makedirs(out_img); os.makedirs(out_lbl)
+        out_img = os.path.join(output_dir, 'images'); os.makedirs(out_img)
+        out_lbl = os.path.join(output_dir, 'labels'); os.makedirs(out_lbl)
         
-        all_images = [p for d in input_dirs for fmt in image_formats for p in glob.glob(os.path.join(d, '**', f'*.{fmt}'), recursive=True)]
-        all_images.sort()
+        all_files_unfiltered = [p for d in input_dirs for fmt in image_formats for p in glob.glob(os.path.join(d, '**', f'*.{fmt}'), recursive=True)]
+        all_images = sorted([p for p in all_files_unfiltered if f'{sep}images{sep}' in p])
         
         c = 0
         for img_path in tqdm(all_images, desc="Merging and flattening"):
@@ -377,8 +374,11 @@ def merge_datasets(input_dirs, output_dir, image_formats, exist_ok=False, strate
         
         print(f"\nRunning Structured Merge based on '{os.path.basename(base_dataset)}'...")
         base_path = Path(base_dataset)
-        base_images = [p for fmt in image_formats for p in base_path.glob(f'**/*.{fmt}')]
-        rel_img_subdirs = sorted(list(set([p.relative_to(base_path).parent for p in base_images])))
+        
+        unfiltered_base_images = [p for fmt in image_formats for p in base_path.glob(f'**/*.{fmt}')]
+        base_images = [p for p in unfiltered_base_images if 'images' in p.parts]
+        
+        rel_img_subdirs = sorted(list(set([p.relative_to(base_path).parent for p in base_images if 'images' in p.parts])))
 
         if not rel_img_subdirs:
             print(f"[Error] No image subdirectories found in the base dataset: {base_dataset}")
@@ -396,8 +396,8 @@ def merge_datasets(input_dirs, output_dir, image_formats, exist_ok=False, strate
             for source_dir in input_dirs:
                 current_scan_dir = Path(source_dir) / rel_img_subdir
                 if not current_scan_dir.is_dir(): continue
-                images_in_subdir = [p for fmt in image_formats for p in current_scan_dir.glob(f'*.{fmt}')]
-                images_in_subdir.sort()
+                # Recursively search within the subdirectory as well for robustness
+                images_in_subdir = sorted([p for fmt in image_formats for p in current_scan_dir.glob(f'**/*.{fmt}')])
                 for img_path in images_in_subdir:
                     lbl_path = get_label_path(str(img_path))
                     if os.path.exists(lbl_path):
@@ -424,6 +424,7 @@ def get_all_image_data(source_dir, image_formats):
     image_paths = []
     for fmt in image_formats:
         image_paths.extend(source_path.glob(f'**/*.{fmt}'))
+    # This filter is the key to supporting both structures robustly.
     image_paths = [p for p in image_paths if 'images' in p.parts]
     if not image_paths: return []
     all_image_data = []
