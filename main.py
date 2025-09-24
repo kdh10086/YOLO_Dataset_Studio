@@ -79,7 +79,7 @@ def clear_screen():
 
 def display_header():
     print("=" * 80)
-    print(" ROS2 YOLO Toolkit - Integrated Environment ".center(80, "="))
+    print(" YOLO Dataset Studio ".center(80, "="))
     print("=" * 80)
     print()
 
@@ -118,7 +118,7 @@ def display_main_ui():
             "8": "Add New Dataset Directory",
         },
         "--- Exit ---": {
-            "0": "Exit Toolkit",
+            "0": "Exit Studio",
         }
     }
 
