@@ -243,6 +243,138 @@ def extract_images_from_rosbag(rosbag_dir, output_dir, image_topic, image_format
     print(f"\nExtraction finished. {saved_count} images saved.")
     return True
 
+def extract_frames_from_video(video_path, output_dir, image_formats, mode=0):
+    """Extracts frames from a video file with optional interactive selection modes."""
+    try:
+        import cv2
+    except ImportError:
+        print("[Error] OpenCV libraries not found. Cannot process video files.")
+        return False
+
+    if not os.path.isfile(video_path):
+        print(f"[Error] Video file not found: {video_path}")
+        return False
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"[Error] Could not open video file: {video_path}")
+        return False
+
+    images_dir = os.path.join(output_dir, 'images')
+    os.makedirs(images_dir, exist_ok=True)
+
+    normalized_formats = [fmt.strip().lower() for fmt in image_formats if fmt and fmt.strip()]
+    default_ext = normalized_formats[0] if normalized_formats else 'png'
+    if default_ext not in normalized_formats and default_ext:
+        normalized_formats.append(default_ext)
+
+    existing = [
+        int(os.path.splitext(f)[0])
+        for f in os.listdir(images_dir)
+        if f.split('.')[-1].lower() in normalized_formats and f.split('.')[0].isdigit()
+    ]
+    start_index = max(existing) + 1 if existing else 0
+    saved_count = 0
+
+    def save_frame(frame):
+        nonlocal start_index, saved_count
+        filename = f"{start_index:06d}.{default_ext}"
+        frame_path = os.path.join(images_dir, filename)
+        if not cv2.imwrite(frame_path, frame):
+            print(f"[Warning] Failed to write frame to '{frame_path}'.")
+            return
+        saved_count += 1
+        start_index += 1
+
+    if mode == 0:
+        print("Running non-interactive extraction...")
+        frame_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        pbar = tqdm(total=frame_total, desc="Extracting Frames") if frame_total else None
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            save_frame(frame)
+            if pbar:
+                pbar.update(1)
+        if pbar:
+            pbar.close()
+        cap.release()
+        print(f"\nExtraction finished. {saved_count} images saved.")
+        return True
+
+    window_name = "Video Frame Extractor"
+    cv2.namedWindow(window_name)
+
+    is_saving = False
+    save_single = False
+    paused = True
+    current_frame = None
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    delay = int(1000 / fps) if fps and fps > 0 else 30
+
+    def mouse_callback(event, _x, _y, _flags, _param):
+        nonlocal save_single, is_saving
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if mode == 1:
+                save_single = True
+            elif mode == 2:
+                is_saving = not is_saving
+
+    cv2.setMouseCallback(window_name, mouse_callback)
+    print("\n--- Interactive Video Controls ---")
+    print("  Spacebar: Play/Pause")
+    print("  Mouse Click: Save (mode 1) or toggle recording (mode 2)")
+    print("  Q: Quit")
+    print("----------------------------------")
+
+    while True:
+        if not paused or current_frame is None:
+            ret, frame = cap.read()
+            if not ret:
+                print("\n[Info] Reached end of video.")
+                break
+            current_frame = frame
+
+            if mode == 2 and is_saving:
+                save_frame(current_frame)
+
+        if mode == 1 and save_single and current_frame is not None:
+            save_frame(current_frame)
+            save_single = False
+
+        if current_frame is None:
+            display_image = np.zeros((480, 640, 3), dtype=np.uint8)
+            text = "Loading video..."
+            text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)[0]
+            text_x = (display_image.shape[1] - text_size[0]) // 2
+            text_y = (display_image.shape[0] + text_size[1]) // 2
+            cv2.putText(display_image, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        else:
+            display_image = current_frame.copy()
+            if mode == 2 and is_saving:
+                cv2.circle(display_image, (30, 30), 20, (0, 0, 255), -1)
+                cv2.putText(display_image, "REC", (60, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            if paused:
+                cv2.putText(display_image, "PAUSED", (display_image.shape[1] - 150, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
+        cv2.imshow(window_name, display_image)
+
+        key = cv2.waitKey(delay if not paused else 50) & 0xFF
+        if key == ord('q'):
+            break
+        elif key == ord(' '):
+            paused = not paused
+        elif key == ord('s') and mode == 1 and current_frame is not None:
+            save_frame(current_frame)
+
+    cap.release()
+    cv2.destroyAllWindows()
+    print(f"\nExtraction finished. {saved_count} images saved.")
+    return True
+
 def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
     """Splits a dataset into multiple subsets based on given ratios, supporting flexible structures."""
     # Robustly find all images within any 'images' subdirectory

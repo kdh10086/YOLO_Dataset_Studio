@@ -1,0 +1,10 @@
+# Optional dependencies for ROS 2 bag extraction
+# Install these only if you plan to use feature [1]: Extract Images from ROS Bag.
+# You must also have a compatible ROS 2 distribution installed and sourced.
+
+rclpy
+rosbag2_py
+rosidl_runtime_py
+rosbag2_interfaces
+cv_bridge
+sensor-msgs

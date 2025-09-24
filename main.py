@@ -26,8 +26,8 @@ def check_environment():
         print(" WARNING: ROS2 Dependencies Not Found ".center(80, "="))
         print("="*80)
         print("The ROS2 bag extraction feature (Option 1) is disabled.")
-        print("To enable it, please ensure you have a valid ROS2 installation (e.g., Humble)")
-        print("and have sourced the setup script before running this toolkit.")
+        print("To enable it, install the extras via 'pip install -r requirements-for-ros2bag.txt',")
+        print("ensure you have a valid ROS2 installation (e.g., Humble), and source its setup script.")
         print("Example: source /opt/ros/humble/setup.bash")
         print("="*80)
 
@@ -90,7 +90,7 @@ def display_main_ui():
     # --- Registered Datasets Panel (Top) ---
     print(" Registered Datasets ".center(80, "-"))
     if not registered_datasets:
-        print(" No datasets registered yet. Use option [8] to add one.")
+        print(" No datasets registered yet. Use option [9] to add one.")
     else:
         for i, path in enumerate(registered_datasets, 1):
             print(f"  <{i}> {path}")
@@ -105,17 +105,18 @@ def display_main_ui():
     menu = {
         "--- Data Preparation ---": {
             "1": "Extract Images from ROS Bag",
-            "2": "Launch Integrated Labeling Tool",
-            "3": "Split Dataset for Training",
+            "2": "Extract Frames from Video",
+            "3": "Launch Integrated Labeling Tool",
+            "4": "Split Dataset for Training",
         },
         "--- Training & Inference ---": {
-            "4": "Train a Model (Teacher/Student)",
-            "5": "Auto-label a Dataset with a Teacher",
+            "5": "Train a Model (Teacher/Student)",
+            "6": "Auto-label a Dataset with a Teacher",
         },
         "--- Utilities ---": {
-            "6": "Merge Datasets",
-            "7": "Sample from Dataset",
-            "8": "Add New Dataset Directory",
+            "7": "Merge Datasets",
+            "8": "Sample from Dataset",
+            "9": "Add New Dataset Directory",
         },
         "--- Exit ---": {
             "0": "Exit Studio",
@@ -127,7 +128,8 @@ def display_main_ui():
     if not GUI_ENABLED:
         if ROS2_ENABLED: # Avoid double-messaging if both are off
             menu["--- Data Preparation ---"]["1"] += " (Interactive Modes Disabled)"
-        menu["--- Data Preparation ---"]["2"] += " (Disabled: GUI Not Available)"
+        menu["--- Data Preparation ---"]["2"] += " (Interactive Modes Disabled)"
+        menu["--- Data Preparation ---"]["3"] += " (Disabled: GUI Not Available)"
 
     for phase, options in menu.items():
         print(phase)
@@ -275,6 +277,47 @@ def run_extract_from_bag():
     fmts = workflow_params.get('image_format', 'png,jpg,jpeg').split(',')
 
     data_handler.extract_images_from_rosbag(rosbag_dir, output_dir, topic, fmts, mode)
+
+
+def run_extract_from_video():
+    print("\n--- Extract Frames from Video ---")
+    print("Convert standard video files (e.g., mp4, avi, mov, mkv) into YOLO-ready image datasets.")
+    print_cancel_message()
+
+    video_path = get_sanitized_path_input("Enter path to the video file")
+    if video_path == 'c' or not video_path:
+        return
+    if not os.path.isfile(video_path):
+        print(f"\n[Error] File not found: {video_path}")
+        return
+
+    dataset_name = get_input("Enter a name for the new output dataset")
+    if dataset_name == 'c' or not dataset_name:
+        return
+
+    os.makedirs(BASE_DATASET_PATH, exist_ok=True)
+    output_dir = os.path.join(BASE_DATASET_PATH, dataset_name)
+    print(f"-> Output will be saved to: {output_dir}")
+
+    mode = 0
+    if GUI_ENABLED:
+        mode_str = get_input("Select mode (0: All, 1: Interactive Single, 2: Interactive Range)", default="0")
+        if mode_str == 'c':
+            return
+        try:
+            mode = int(mode_str)
+            if mode not in [0, 1, 2]:
+                raise ValueError
+        except ValueError:
+            print("[Error] Invalid mode.")
+            return
+    else:
+        print("\n[Info] GUI not available. Extracting all frames automatically (Mode 0).")
+
+    workflow_params = config.get('workflow_parameters', {})
+    fmts = workflow_params.get('image_format', 'png,jpg,jpeg').split(',')
+
+    data_handler.extract_frames_from_video(video_path, output_dir, fmts, mode)
 
 def run_labeling_tool():
     print("\n--- Launch Integrated Labeling Tool ---")
@@ -544,22 +587,28 @@ def main():
     except yaml.YAMLError as e: print(f"[Error] Failed to parse models_config.yaml: {e}"); sys.exit(1)
 
     actions = {
-        '1': run_extract_from_bag, '2': run_labeling_tool, '3': run_split_dataset,
-        '4': run_unified_training, '5': run_auto_labeler, '6': run_merge_datasets,
-        '7': run_random_sampler, '8': add_dataset_directory
+        '1': run_extract_from_bag,
+        '2': run_extract_from_video,
+        '3': run_labeling_tool,
+        '4': run_split_dataset,
+        '5': run_unified_training,
+        '6': run_auto_labeler,
+        '7': run_merge_datasets,
+        '8': run_random_sampler,
+        '9': add_dataset_directory
     }
 
     while True:
         display_main_ui()
         choice = input("Select an option: ").strip()
 
-        if choice == '0': print("Exiting toolkit. Goodbye!"); break
+        if choice == '0': print("Exiting studio. Goodbye!"); break
 
         if choice == '1' and not ROS2_ENABLED:
             print("\n[Error] This feature is disabled. Please install ROS2 and source the environment.")
             input("\nPress Enter to return...")
             continue
-        if choice == '2' and not GUI_ENABLED:
+        if choice == '3' and not GUI_ENABLED:
             print("\n[Error] This feature is disabled in a non-GUI environment.")
             input("\nPress Enter to return...")
             continue
@@ -568,7 +617,7 @@ def main():
         if action:
             try:
                 action()
-                if choice != '8':
+                if choice != '9':
                     input("\nPress Enter to return to the main menu...")
             except Exception as e:
                 print(f"\n[UNHANDLED ERROR] An unexpected error occurred: {e}")
