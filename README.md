@@ -118,3 +118,4 @@ Outputs are stored under `selected_for_labeling/` inside the workspace directory
   pytest
   ```
 - Example automation script lives in `examples/quickstart.py` for bootstrapping demos.
+- To publish releases from CI, add a `PYPI_TOKEN` secret (an API token from PyPI) and draft a GitHub release; the workflow uploads artifacts automatically.
