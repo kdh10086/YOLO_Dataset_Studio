@@ -62,8 +62,9 @@ Make sure a ROS2 distribution (e.g., Humble) is installed and sourced before lau
 2. Configure `models_config.yaml`: set class names, dataset roots, YOLO model variants, and workflow parameters (topics, split ratios, confidence thresholds, etc.).
 3. Launch the CLI:
    ```bash
-   python main.py
+   yolo-dataset-studio
    ```
+   Prefer running the installed command. For development you can still invoke `python main.py`.
    The menu adapts to your environment, disabling ROS2 or GUI features when unavailable.
 
 ## Interactive CLI at a glance
@@ -106,3 +107,14 @@ Outputs are stored under `selected_for_labeling/` inside the workspace directory
 - Datasets you create or import live under `datasets/` (or any paths you register).
 - YOLO training runs follow the Ultralytics convention in `runs/train/<role>/<run_name>/` with metrics and checkpoints.
 - Auto-labeling writes directly next to the source images, respecting `images/` → `labels/` folder patterns.
+
+## Development notes
+- Install in editable mode with optional extras when developing:
+  ```bash
+  pip install -e .[dev,ros2bag]
+  ```
+- Run the lightweight smoke tests:
+  ```bash
+  pytest
+  ```
+- Example automation script lives in `examples/quickstart.py` for bootstrapping demos.

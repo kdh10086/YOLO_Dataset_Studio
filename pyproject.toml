@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yolo-dataset-studio"
+version = "0.1.0"
+description = "Integrated CLI pipeline for creating custom YOLO datasets with optional ROS 2 bag ingestion."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "kdh10086" }
+]
+requires-python = ">=3.10"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "ultralytics",
+    "torch",
+    "torchvision",
+    "opencv-python",
+    "numpy",
+    "pyyaml",
+    "tqdm",
+    "Pillow",
+    "scikit-learn",
+    "transformers",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+ros2bag = [
+    "rclpy",
+    "rosbag2_py",
+    "rosidl_runtime_py",
+    "rosbag2_interfaces",
+    "cv_bridge",
+    "sensor-msgs",
+]
+dev = [
+    "pytest",
+]
+
+[project.urls]
+Homepage = "https://github.com/kdh10086/YOLO_Dataset_Studio"
+"Issue Tracker" = "https://github.com/kdh10086/YOLO_Dataset_Studio/issues"
+
+[project.scripts]
+yolo-dataset-studio = "main:main"
+
+[tool.setuptools.packages.find]
+include = ["toolkit", "advanced_features"]
+
+[tool.setuptools]
+py-modules = ["main"]
+include-package-data = true
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "-q"
