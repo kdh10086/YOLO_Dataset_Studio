@@ -45,6 +45,17 @@ class IntegratedLabeler:
         self.magnifier_window_name = "Magnifier"
         self.magnifier_size = 680
         self.magnifier_zoom_level = 4 # e.g., 4x zoom
+        
+        # --- Clipboard-style buffer & selection state ---
+        self.clipboard_bbox = None
+        self.active_bbox_index = None
+        self.bbox_nudge_step = 1
+        self.arrow_key_codes = {
+            'left': {2424832, 65361, 63234},
+            'right': {2555904, 65363, 63235},
+            'up': {2490368, 65362, 63232},
+            'down': {2621440, 65364, 63233}
+        }
 
     def _calculate_iou(self, box1, box2):
         # box format: [x1, y1, x2, y2]
@@ -121,6 +132,48 @@ class IntegratedLabeler:
         p = os.path.join(self.dataset_dir, 'review_list.txt')
         if self.review_list: open(p,'w').write('\n'.join(sorted(list(self.review_list))))
         elif os.path.exists(p): os.remove(p)
+
+    def _sanitize_bbox_for_current_image(self, bbox):
+        if not bbox or self.w_orig <= 0 or self.h_orig <= 0:
+            return None
+
+        cid, x1, y1, x2, y2 = bbox
+        x1, x2 = sorted((int(round(x1)), int(round(x2))))
+        y1, y2 = sorted((int(round(y1)), int(round(y2))))
+
+        max_x = max(self.w_orig - 1, 0)
+        max_y = max(self.h_orig - 1, 0)
+
+        x1 = max(0, min(max_x, x1))
+        x2 = max(0, min(max_x, x2))
+        y1 = max(0, min(max_y, y1))
+        y2 = max(0, min(max_y, y2))
+
+        if x1 == x2 or y1 == y2:
+            return None
+
+        return (cid, x1, y1, x2, y2)
+
+    def _move_last_bbox(self, dx, dy):
+        if not self.current_bboxes:
+            self.active_bbox_index = None
+            return
+
+        if self.active_bbox_index is None or not (0 <= self.active_bbox_index < len(self.current_bboxes)):
+            self.active_bbox_index = len(self.current_bboxes) - 1
+
+        cid, x1, y1, x2, y2 = self.current_bboxes[self.active_bbox_index]
+
+        dx = max(-x1, min(dx, self.w_orig - 1 - x2))
+        dy = max(-y1, min(dy, self.h_orig - 1 - y2))
+
+        if dx == 0 and dy == 0:
+            return
+
+        self.history.append(self.current_bboxes.copy())
+        moved_bbox = (cid, x1 + dx, y1 + dy, x2 + dx, y2 + dy)
+        self.current_bboxes[self.active_bbox_index] = moved_bbox
+        self.clipboard_bbox = moved_bbox
 
     def _isolate_current_image(self):
         p=self.image_paths[self.img_index]; lp=get_label_path(p); iso_dir=os.path.join(self.dataset_dir,'_isolated')
@@ -249,7 +302,10 @@ class IntegratedLabeler:
                 rect_x2, rect_y2 = max(self.first_point[0], ox), max(self.first_point[1], oy)
 
                 if self.mode == 'draw':
-                    self.current_bboxes.append((self.current_class_id, rect_x1, rect_y1, rect_x2, rect_y2))
+                    new_bbox = (self.current_class_id, rect_x1, rect_y1, rect_x2, rect_y2)
+                    self.current_bboxes.append(new_bbox)
+                    self.clipboard_bbox = new_bbox
+                    self.active_bbox_index = len(self.current_bboxes) - 1
                 elif self.mode == 'delete':
                     initial_box_count = len(self.current_bboxes)
                     # Keep boxes whose center is NOT within the deletion rectangle
@@ -261,6 +317,7 @@ class IntegratedLabeler:
                     removed_count = initial_box_count - len(self.current_bboxes)
                     if removed_count > 0:
                         print(f"-> Removed {removed_count} boxes.")
+                    self.active_bbox_index = len(self.current_bboxes) - 1 if self.current_bboxes else None
 
                 self.first_point = None # Reset for next operation
 
@@ -305,6 +362,7 @@ class IntegratedLabeler:
                         (float(l[2]) + float(l[4]) / 2) * self.h_orig
                     ])) for l in lines if len(l) == 5
                 ]
+        self.active_bbox_index = len(self.current_bboxes) - 1 if self.current_bboxes else None
         return True
 
     def run(self):
@@ -317,6 +375,8 @@ class IntegratedLabeler:
         print("  - [W]: Draw Mode (Default)")
         print("  - [E]: Delete Mode")
         print("  - [R]: Undo Last Action")
+        print("  - [V]: Paste Last Bounding Box")
+        print("  - [Arrow Keys]: Nudge Most Recent Bounding Box")
         print("  - [1-9]: Select Class")
         print("-" * 50)
         print(" Navigation & Saving:")
@@ -357,19 +417,51 @@ class IntegratedLabeler:
                 self._update_magnifier()
 
                 cv2.imshow(self.window_name, self.clone)
-                key = cv2.waitKey(1) & 0xFF
+                key = cv2.waitKeyEx(1)
+                if key == -1:
+                    continue
 
-                if key in [ord('q'), ord('c')]:
-                    if key != ord('c'): self._save_current_labels()
+                if key in self.arrow_key_codes['left']:
+                    self._move_last_bbox(-self.bbox_nudge_step, 0)
+                    continue
+                if key in self.arrow_key_codes['right']:
+                    self._move_last_bbox(self.bbox_nudge_step, 0)
+                    continue
+                if key in self.arrow_key_codes['up']:
+                    self._move_last_bbox(0, -self.bbox_nudge_step)
+                    continue
+                if key in self.arrow_key_codes['down']:
+                    self._move_last_bbox(0, self.bbox_nudge_step)
+                    continue
+
+                key_char = key & 0xFF
+                key_lower = chr(key_char).lower() if 0 <= key_char < 256 else ''
+
+                if key_lower in ['q', 'c']:
+                    if key_lower != 'c': self._save_current_labels()
                     self.quit_flag = True; break
-                elif key in [ord('d'), ord('s')]: # Next
+                elif key_lower in ['d', 's']: # Next
                     self._save_current_labels(); self._navigate(1); break
-                elif key == ord('a'): # Previous
+                elif key_lower == 'a': # Previous
                     self._save_current_labels(); self._navigate(-1); break
-                elif key == ord('r'): # Undo
+                elif key_lower == 'r': # Undo
                     if self.history: self.current_bboxes = self.history.pop()
-                elif ord('1') <= key <= ord('9'):
-                    class_id = int(chr(key)) - 1
+                    self.active_bbox_index = len(self.current_bboxes) - 1 if self.current_bboxes else None
+                elif key_lower == 'v':
+                    if self.clipboard_bbox is None:
+                        print("[Info] No bounding box available to paste yet.")
+                    else:
+                        candidate = self._sanitize_bbox_for_current_image(self.clipboard_bbox)
+                        if candidate is None:
+                            print("[Warning] Last bounding box does not fit within the current image dimensions.")
+                        else:
+                            self.history.append(self.current_bboxes.copy())
+                            self.current_bboxes.append(candidate)
+                            self.clipboard_bbox = candidate
+                            self.active_bbox_index = len(self.current_bboxes) - 1
+                            print("-> Pasted last bounding box.")
+                elif ord('1') <= key_char <= ord('9'):
+                    class_id = int(chr(key_char)) - 1
                     if class_id in self.classes:
                         self.current_class_id = class_id
                         print(f"Current class set to: {self.classes.get(self.current_class_id, 'N/A')}")
@@ -378,15 +470,15 @@ class IntegratedLabeler:
                             print("-> Switched to Draw Mode")
                     else:
                         print(f"[Warning] Class ID {class_id} is not defined in config.")
-                elif key == ord('w'): self.mode = 'draw'
-                elif key == ord('e'): self.mode = 'delete'
-                elif key == ord('f'): # Flag for review
+                elif key_lower == 'w': self.mode = 'draw'
+                elif key_lower == 'e': self.mode = 'delete'
+                elif key_lower == 'f': # Flag for review
                     n = os.path.basename(self.image_paths[self.img_index])
                     if n in self.review_list: self.review_list.remove(n)
                     else: self.review_list.add(n)
-                elif key == ord('x'): # Exclude
+                elif key_lower == 'x': # Exclude
                     self._isolate_current_image(); break
-                elif key == ord('t'): # Toggle filter
+                elif key_lower == 't': # Toggle filter
                     self.filter_mode = 'review' if self.filter_mode == 'all' else 'all'
                     self._apply_filter()
                     if self.filtered_image_indices: self.img_index = self.filtered_image_indices[0]
