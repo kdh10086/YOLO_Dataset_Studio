@@ -28,6 +28,7 @@ class IntegratedLabeler:
         self.image_paths, self.filtered_image_indices = [], []
         self.img_index, self.current_class_id = 0, 0
         self.current_bboxes, self.review_list, self.history = [], set(), []
+        self.bbox_precise = []
         self.img_orig, self.display_img, self.clone = None, None, None
         self.h_orig, self.w_orig, self.ratio = 0, 0, 1.0
 
@@ -180,10 +181,19 @@ class IntegratedLabeler:
 
         return (cid, x1, y1, x2, y2)
 
+    def _push_history(self):
+        self.history.append((self.current_bboxes.copy(), self.bbox_precise.copy()))
+
+    def _ensure_precise_state(self):
+        if len(self.bbox_precise) != len(self.current_bboxes):
+            self.bbox_precise = [self._pixels_to_yolo(b) for b in self.current_bboxes]
+
     def _move_last_bbox(self, dx, dy):
         if not self.current_bboxes:
             self.active_bbox_index = None
             return
+
+        self._ensure_precise_state()
 
         if self.active_bbox_index is None or not (0 <= self.active_bbox_index < len(self.current_bboxes)):
             self.active_bbox_index = len(self.current_bboxes) - 1
@@ -196,10 +206,74 @@ class IntegratedLabeler:
         if dx == 0 and dy == 0:
             return
 
-        self.history.append(self.current_bboxes.copy())
+        self._push_history()
         moved_bbox = (cid, x1 + dx, y1 + dy, x2 + dx, y2 + dy)
         self.current_bboxes[self.active_bbox_index] = moved_bbox
         self.clipboard_bbox = moved_bbox
+        if len(self.bbox_precise) > self.active_bbox_index:
+            self.bbox_precise[self.active_bbox_index] = self._pixels_to_yolo(moved_bbox)
+
+    def _scale_last_bbox(self, grow):
+        if not self.current_bboxes:
+            self.active_bbox_index = None
+            return
+
+        self._ensure_precise_state()
+
+        if self.active_bbox_index is None or not (0 <= self.active_bbox_index < len(self.current_bboxes)):
+            self.active_bbox_index = len(self.current_bboxes) - 1
+
+        cid, x1, y1, x2, y2 = self.current_bboxes[self.active_bbox_index]
+        w = x2 - x1
+        h = y2 - y1
+        if w <= 1 or h <= 1 or self.w_orig <= 0 or self.h_orig <= 0:
+            return
+
+        short_side = min(w, h)
+        long_side = max(w, h)
+
+        if grow:
+            new_short = short_side + 1
+        else:
+            if short_side <= 1:
+                return
+            new_short = short_side - 1
+
+        scale = new_short / short_side if short_side > 0 else None
+        if scale is None or scale <= 0:
+            return
+
+        new_long = long_side * scale
+
+        if w <= h:
+            new_w = new_short
+            new_h = max(1, int(round(new_long)))
+        else:
+            new_h = new_short
+            new_w = max(1, int(round(new_long)))
+
+        cx = (x1 + x2) / 2.0
+        cy = (y1 + y2) / 2.0
+
+        new_x1 = int(round(cx - new_w / 2.0))
+        new_x2 = new_x1 + new_w
+        new_y1 = int(round(cy - new_h / 2.0))
+        new_y2 = new_y1 + new_h
+
+        scaled = self._sanitize_bbox_for_current_image((cid, new_x1, new_y1, new_x2, new_y2))
+        if scaled is None:
+            return
+
+        scaled_w = scaled[3] - scaled[1]
+        scaled_h = scaled[4] - scaled[2]
+        if scaled_w <= 0 or scaled_h <= 0:
+            return
+
+        self._push_history()
+        self.current_bboxes[self.active_bbox_index] = scaled
+        self.clipboard_bbox = scaled
+        if len(self.bbox_precise) > self.active_bbox_index:
+            self.bbox_precise[self.active_bbox_index] = self._pixels_to_yolo(scaled)
 
     def _isolate_current_image(self):
         p=self.image_paths[self.img_index]; lp=get_label_path(p); iso_dir=os.path.join(self.dataset_dir,'_isolated')
@@ -322,7 +396,8 @@ class IntegratedLabeler:
             if self.first_point is None:
                 self.first_point = (ox, oy)
             else:
-                self.history.append(self.current_bboxes.copy())
+                self._ensure_precise_state()
+                self._push_history()
                 # Finalize the rectangle
                 rect_x1, rect_y1 = min(self.first_point[0], ox), min(self.first_point[1], oy)
                 rect_x2, rect_y2 = max(self.first_point[0], ox), max(self.first_point[1], oy)
@@ -330,20 +405,28 @@ class IntegratedLabeler:
                 if self.mode == 'draw':
                     new_bbox = (self.current_class_id, rect_x1, rect_y1, rect_x2, rect_y2)
                     self.current_bboxes.append(new_bbox)
+                    self.bbox_precise.append(self._pixels_to_yolo(new_bbox))
                     self.clipboard_bbox = new_bbox
                     self.active_bbox_index = len(self.current_bboxes) - 1
                 elif self.mode == 'delete':
                     initial_box_count = len(self.current_bboxes)
-                    # Keep boxes whose center is NOT within the deletion rectangle
-                    self.current_bboxes = [
-                        b for b in self.current_bboxes
-                        if not (rect_x1 < (b[1] + b[3]) / 2 < rect_x2 and
-                                rect_y1 < (b[2] + b[4]) / 2 < rect_y2)
-                    ]
-                    removed_count = initial_box_count - len(self.current_bboxes)
+                    filtered_boxes = []
+                    filtered_precise = []
+                    for bbox, precise in zip(self.current_bboxes, self.bbox_precise):
+                        center_x = (bbox[1] + bbox[3]) / 2
+                        center_y = (bbox[2] + bbox[4]) / 2
+                        if rect_x1 < center_x < rect_x2 and rect_y1 < center_y < rect_y2:
+                            continue
+                        filtered_boxes.append(bbox)
+                        filtered_precise.append(precise)
+
+                    removed_count = initial_box_count - len(filtered_boxes)
+                    self.current_bboxes = filtered_boxes
+                    self.bbox_precise = filtered_precise
                     if removed_count > 0:
                         print(f"-> Removed {removed_count} boxes.")
                     self.active_bbox_index = len(self.current_bboxes) - 1 if self.current_bboxes else None
+                    self.clipboard_bbox = self.current_bboxes[self.active_bbox_index] if self.current_bboxes else None
 
                 self.first_point = None # Reset for next operation
 
@@ -370,6 +453,7 @@ class IntegratedLabeler:
         if self.img_orig is None: return False
 
         self.current_bboxes, self.history, self.first_point = [], [], None
+        self.bbox_precise = []
 
         self.h_orig, self.w_orig = self.img_orig.shape[:2]
 
@@ -395,6 +479,7 @@ class IntegratedLabeler:
                     parsed_boxes.append(bbox)
 
             self.current_bboxes = parsed_boxes
+            self.bbox_precise = [self._pixels_to_yolo(b) for b in parsed_boxes]
         self.active_bbox_index = len(self.current_bboxes) - 1 if self.current_bboxes else None
         return True
 
@@ -410,6 +495,7 @@ class IntegratedLabeler:
         print("  - [R]: Undo Last Action")
         print("  - [V]: Paste Last Bounding Box")
         print("  - [Arrow Keys]: Nudge Most Recent Bounding Box")
+        print("  - [T/Y]: Grow/Shrink Most Recent Bounding Box")
         print("  - [1-9]: Select Class")
         print("-" * 50)
         print(" Navigation & Saving:")
@@ -420,7 +506,7 @@ class IntegratedLabeler:
         print("-" * 50)
         print(" Workflow:")
         print("  - [F]: Flag / Unflag for Review")
-        print("  - [T]: Toggle Filter (All / Review)")
+        print("  - [G]: Toggle Filter (All / Review)")
         print("  - [X]: Exclude Current Image")
         print("="*50)
 
@@ -478,8 +564,16 @@ class IntegratedLabeler:
                 elif key_lower == 'a': # Previous
                     self._save_current_labels(); self._navigate(-1); break
                 elif key_lower == 'r': # Undo
-                    if self.history: self.current_bboxes = self.history.pop()
+                    if self.history:
+                        prev_boxes, prev_precise = self.history.pop()
+                        self.current_bboxes = prev_boxes
+                        self.bbox_precise = prev_precise
+                        self.clipboard_bbox = self.current_bboxes[-1] if self.current_bboxes else None
                     self.active_bbox_index = len(self.current_bboxes) - 1 if self.current_bboxes else None
+                elif key_lower == 't':
+                    self._scale_last_bbox(grow=True)
+                elif key_lower == 'y':
+                    self._scale_last_bbox(grow=False)
                 elif key_lower == 'v':
                     if self.clipboard_bbox is None:
                         print("[Info] No bounding box available to paste yet.")
@@ -488,8 +582,10 @@ class IntegratedLabeler:
                         if candidate is None:
                             print("[Warning] Last bounding box does not fit within the current image dimensions.")
                         else:
-                            self.history.append(self.current_bboxes.copy())
+                            self._ensure_precise_state()
+                            self._push_history()
                             self.current_bboxes.append(candidate)
+                            self.bbox_precise.append(self._pixels_to_yolo(candidate))
                             self.clipboard_bbox = candidate
                             self.active_bbox_index = len(self.current_bboxes) - 1
                             print("-> Pasted last bounding box.")
@@ -511,7 +607,7 @@ class IntegratedLabeler:
                     else: self.review_list.add(n)
                 elif key_lower == 'x': # Exclude
                     self._isolate_current_image(); break
-                elif key_lower == 't': # Toggle filter
+                elif key_lower == 'g': # Toggle filter
                     self.filter_mode = 'review' if self.filter_mode == 'all' else 'all'
                     self._apply_filter()
                     if self.filtered_image_indices: self.img_index = self.filtered_image_indices[0]
