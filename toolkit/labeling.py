@@ -57,6 +57,7 @@ class IntegratedLabeler:
             'up': {2490368, 65362, 63232},
             'down': {2621440, 65364, 63233}
         }
+        self._overlap_markers = {}
 
     def _calculate_iou(self, box1, box2):
         # box format: [x1, y1, x2, y2]
@@ -183,10 +184,20 @@ class IntegratedLabeler:
 
     def _push_history(self):
         self.history.append((self.current_bboxes.copy(), self.bbox_precise.copy()))
+        return len(self.history) - 1
 
     def _ensure_precise_state(self):
         if len(self.bbox_precise) != len(self.current_bboxes):
             self.bbox_precise = [self._pixels_to_yolo(b) for b in self.current_bboxes]
+
+    def _update_overlap_counts(self):
+        markers = {}
+        for bbox in self.current_bboxes:
+            _, x1, y1, x2, y2 = bbox
+            key = (int(x1), int(y1), int(x2), int(y2))
+            markers[key] = markers.get(key, 0) + 1
+
+        self._overlap_markers = {key: count for key, count in markers.items() if count > 1}
 
     def _move_last_bbox(self, dx, dy):
         if not self.current_bboxes:
@@ -206,12 +217,15 @@ class IntegratedLabeler:
         if dx == 0 and dy == 0:
             return
 
-        self._push_history()
+        history_idx = self._push_history()
         moved_bbox = (cid, x1 + dx, y1 + dy, x2 + dx, y2 + dy)
         self.current_bboxes[self.active_bbox_index] = moved_bbox
         self.clipboard_bbox = moved_bbox
         if len(self.bbox_precise) > self.active_bbox_index:
             self.bbox_precise[self.active_bbox_index] = self._pixels_to_yolo(moved_bbox)
+        self._update_overlap_counts()
+
+        return history_idx
 
     def _scale_last_bbox(self, grow):
         if not self.current_bboxes:
@@ -269,11 +283,14 @@ class IntegratedLabeler:
         if scaled_w <= 0 or scaled_h <= 0:
             return
 
-        self._push_history()
+        history_idx = self._push_history()
         self.current_bboxes[self.active_bbox_index] = scaled
         self.clipboard_bbox = scaled
         if len(self.bbox_precise) > self.active_bbox_index:
             self.bbox_precise[self.active_bbox_index] = self._pixels_to_yolo(scaled)
+        self._update_overlap_counts()
+
+        return history_idx
 
     def _isolate_current_image(self):
         p=self.image_paths[self.img_index]; lp=get_label_path(p); iso_dir=os.path.join(self.dataset_dir,'_isolated')
@@ -281,8 +298,10 @@ class IntegratedLabeler:
         shutil.move(p,os.path.join(iso_dir,'images',os.path.basename(p)))
         if os.path.exists(lp): shutil.move(lp,os.path.join(iso_dir,'labels',os.path.basename(lp)))
         self.image_paths.pop(self.img_index); self._apply_filter(); self.img_index=min(self.img_index,len(self.filtered_image_indices)-1)
+        self._update_overlap_counts()
 
     def _redraw_ui(self):
+        self._update_overlap_counts()
         self.clone = self.display_img.copy()
         h, w, _ = self.clone.shape
 
@@ -290,6 +309,13 @@ class IntegratedLabeler:
         for cid, x1, y1, x2, y2 in self.current_bboxes:
             color = self.colors.get(cid, (0, 255, 0))
             cv2.rectangle(self.clone, (int(x1 * self.ratio), int(y1 * self.ratio)), (int(x2 * self.ratio), int(y2 * self.ratio)), color, 2)
+
+        for (x1, y1, x2, y2), count in self._overlap_markers.items():
+            text_pos_x = int(round(x2 * self.ratio)) - 10
+            text_pos_y = int(round(y1 * self.ratio)) - 5
+            text_pos_x = max(0, min(text_pos_x, self.clone.shape[1] - 10))
+            text_pos_y = max(15, min(text_pos_y, self.clone.shape[0] - 10))
+            cv2.putText(self.clone, str(count), (text_pos_x, text_pos_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
         # Draw point-to-point preview
         if self.first_point and self.current_mouse_pos:
@@ -319,6 +345,7 @@ class IntegratedLabeler:
             cv2.putText(self.clone, "R", (20, 50), cv2.FONT_HERSHEY_TRIPLEX, 1.5, (0, 255, 255), 3)
 
     def _update_magnifier(self):
+        self._update_overlap_counts()
         if not self.current_mouse_pos or self.img_orig is None:
             magnifier_img = np.zeros((self.magnifier_size, self.magnifier_size, 3), dtype=np.uint8)
             cv2.putText(magnifier_img, "No Image", (150, 340), cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 3)
@@ -373,6 +400,14 @@ class IntegratedLabeler:
                 color = self.colors.get(cid, (0, 255, 0))
                 cv2.rectangle(magnifier_img, to_mag_coords((b_x1, b_y1)), to_mag_coords((b_x2, b_y2)), color, 2)
 
+        # Draw overlap counts inside the magnifier view
+        for (x1, y1, x2, y2), count in self._overlap_markers.items():
+            if x2 > x1_ideal and x1 < (x1_ideal + crop_w) and y2 > y1_ideal and y1 < (y1_ideal + crop_h):
+                tr_x, tr_y = to_mag_coords((x2, y1))
+                text_pos_x = max(0, min(tr_x - 10, w_mag - 10))
+                text_pos_y = max(15, min(tr_y - 5, h_mag - 10))
+                cv2.putText(magnifier_img, str(count), (text_pos_x, text_pos_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
         # Draw the preview rectangle if a box is being drawn
         if self.first_point:
             if self.mode == 'draw':
@@ -408,6 +443,7 @@ class IntegratedLabeler:
                     self.bbox_precise.append(self._pixels_to_yolo(new_bbox))
                     self.clipboard_bbox = new_bbox
                     self.active_bbox_index = len(self.current_bboxes) - 1
+                    self._update_overlap_counts()
                 elif self.mode == 'delete':
                     initial_box_count = len(self.current_bboxes)
                     filtered_boxes = []
@@ -427,6 +463,7 @@ class IntegratedLabeler:
                         print(f"-> Removed {removed_count} boxes.")
                     self.active_bbox_index = len(self.current_bboxes) - 1 if self.current_bboxes else None
                     self.clipboard_bbox = self.current_bboxes[self.active_bbox_index] if self.current_bboxes else None
+                    self._update_overlap_counts()
 
                 self.first_point = None # Reset for next operation
 
@@ -454,6 +491,7 @@ class IntegratedLabeler:
 
         self.current_bboxes, self.history, self.first_point = [], [], None
         self.bbox_precise = []
+        self._overlap_markers = {}
 
         self.h_orig, self.w_orig = self.img_orig.shape[:2]
 
@@ -480,6 +518,7 @@ class IntegratedLabeler:
 
             self.current_bboxes = parsed_boxes
             self.bbox_precise = [self._pixels_to_yolo(b) for b in parsed_boxes]
+        self._update_overlap_counts()
         self.active_bbox_index = len(self.current_bboxes) - 1 if self.current_bboxes else None
         return True
 
@@ -568,8 +607,8 @@ class IntegratedLabeler:
                         prev_boxes, prev_precise = self.history.pop()
                         self.current_bboxes = prev_boxes
                         self.bbox_precise = prev_precise
-                        self.clipboard_bbox = self.current_bboxes[-1] if self.current_bboxes else None
                     self.active_bbox_index = len(self.current_bboxes) - 1 if self.current_bboxes else None
+                    self._update_overlap_counts()
                 elif key_lower == 't':
                     self._scale_last_bbox(grow=True)
                 elif key_lower == 'y':
@@ -589,6 +628,7 @@ class IntegratedLabeler:
                             self.clipboard_bbox = candidate
                             self.active_bbox_index = len(self.current_bboxes) - 1
                             print("-> Pasted last bounding box.")
+                            self._update_overlap_counts()
                 elif ord('1') <= key_char <= ord('9'):
                     class_id = int(chr(key_char)) - 1
                     if class_id in self.classes:
