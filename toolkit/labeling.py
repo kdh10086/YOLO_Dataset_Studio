@@ -88,7 +88,28 @@ class IntegratedLabeler:
             cv2.line(img, (e[0], i), (e[0], min(i + gap, e[1])), color, thickness)
 
     def _pixels_to_yolo(self, bbox):
-        cid,x1,y1,x2,y2=bbox; return cid,((x1+x2)/2)/self.w_orig,((y1+y2)/2)/self.h_orig,abs(x2-x1)/self.w_orig,abs(y2-y1)/self.h_orig
+        cid, x1, y1, x2, y2 = bbox
+        cx = ((x1 + x2) / 2) / self.w_orig if self.w_orig else 0
+        cy = ((y1 + y2) / 2) / self.h_orig if self.h_orig else 0
+        bw = abs(x2 - x1) / self.w_orig if self.w_orig else 0
+        bh = abs(y2 - y1) / self.h_orig if self.h_orig else 0
+        return cid, cx, cy, bw, bh
+
+    def _yolo_to_pixels(self, cls_id, cx, cy, bw, bh):
+        if self.w_orig <= 0 or self.h_orig <= 0:
+            return None
+
+        px = cx * self.w_orig
+        py = cy * self.h_orig
+        half_w = (bw * self.w_orig) / 2
+        half_h = (bh * self.h_orig) / 2
+
+        x1 = int(round(px - half_w))
+        y1 = int(round(py - half_h))
+        x2 = int(round(px + half_w))
+        y2 = int(round(py + half_h))
+
+        return self._sanitize_bbox_for_current_image((cls_id, x1, y1, x2, y2))
 
     def _load_data(self):
         fmts = self.config.get('workflow_parameters', {}).get('image_format', 'png,jpg,jpeg').split(',')
@@ -126,7 +147,12 @@ class IntegratedLabeler:
         if self.img_index < len(self.image_paths):
             lbl_path = get_label_path(self.image_paths[self.img_index])
             os.makedirs(os.path.dirname(lbl_path), exist_ok=True)
-            with open(lbl_path, 'w') as f: f.write('\n'.join([f"{b[0]} {self._pixels_to_yolo(b)[1]:.6f} {self._pixels_to_yolo(b)[2]:.6f} {self._pixels_to_yolo(b)[3]:.6f} {self._pixels_to_yolo(b)[4]:.6f}" for b in self.current_bboxes]))
+            lines = []
+            for bbox in self.current_bboxes:
+                yolo_fmt = self._pixels_to_yolo(bbox)
+                lines.append(f"{yolo_fmt[0]} {yolo_fmt[1]:.6f} {yolo_fmt[2]:.6f} {yolo_fmt[3]:.6f} {yolo_fmt[4]:.6f}")
+            with open(lbl_path, 'w') as f:
+                f.write('\n'.join(lines))
 
     def _save_review_list(self):
         p = os.path.join(self.dataset_dir, 'review_list.txt')
@@ -353,15 +379,22 @@ class IntegratedLabeler:
         lp = get_label_path(p)
         if os.path.exists(lp):
             with open(lp, 'r') as f:
-                lines = [ln.strip().split() for ln in f.readlines()]
-                self.current_bboxes = [
-                    (int(l[0]), *map(int, [
-                        (float(l[1]) - float(l[3]) / 2) * self.w_orig,
-                        (float(l[2]) - float(l[4]) / 2) * self.h_orig,
-                        (float(l[1]) + float(l[3]) / 2) * self.w_orig,
-                        (float(l[2]) + float(l[4]) / 2) * self.h_orig
-                    ])) for l in lines if len(l) == 5
-                ]
+                lines = [ln.strip().split() for ln in f.readlines() if ln.strip()]
+
+            parsed_boxes = []
+            for l in lines:
+                if len(l) != 5:
+                    continue
+                cls_id = int(float(l[0]))
+                try:
+                    cx, cy, bw, bh = map(float, l[1:])
+                except ValueError:
+                    continue
+                bbox = self._yolo_to_pixels(cls_id, cx, cy, bw, bh)
+                if bbox is not None:
+                    parsed_boxes.append(bbox)
+
+            self.current_bboxes = parsed_boxes
         self.active_bbox_index = len(self.current_bboxes) - 1 if self.current_bboxes else None
         return True
 
