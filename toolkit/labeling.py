@@ -346,11 +346,17 @@ class IntegratedLabeler:
                     text_scale = 0.6
                     text_thickness = 2
                     (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, text_scale, text_thickness)
-                    draw_x = int(x2 * self.ratio) - text_w - 4
-                    draw_y = int(y1 * self.ratio) + text_h + 4
-                    draw_x = max(0, min(draw_x, w - text_w - 4))
-                    if draw_y + baseline > h:
-                        draw_y = h - baseline - 2
+                    corner_x = int(x2 * self.ratio)
+                    corner_y = int(y1 * self.ratio)
+
+                    draw_x = corner_x - text_w
+                    draw_y = corner_y - 4
+
+                    draw_x = max(0, min(draw_x, w - text_w - 2))
+                    if draw_y - text_h < 0:
+                        draw_y = text_h + 2
+                    if draw_y + baseline >= corner_y:
+                        draw_y = max(text_h + 2, corner_y - baseline - 2)
 
                     cv2.putText(
                         self.clone,
