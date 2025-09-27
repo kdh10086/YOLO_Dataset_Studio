@@ -4,8 +4,23 @@ __pycache__/
 *.pyo
 *.pyd
 *.egg-info/
+.venv/
 venv/
+.env/
+env/
 *.env
+
+# Python tooling caches & reports
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Packaging/build artifacts
+build/
+dist/
 
 # IDE - Visual Studio Code & JetBrains
 .vscode/
