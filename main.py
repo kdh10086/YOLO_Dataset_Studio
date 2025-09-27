@@ -7,6 +7,7 @@ from datetime import datetime
 
 # Import toolkit functions
 from toolkit import data_handler, labeling, training
+from toolkit.utils import build_class_hotkeys, normalize_class_map
 
 # --- Dependency & Environment Check ---
 ROS2_ENABLED = False
@@ -325,19 +326,20 @@ def run_labeling_tool():
 
     # Display class information and key-bindings
     classes = config.get('model_configurations', {}).get('classes', {})
+    class_hotkeys = build_class_hotkeys(classes)
+
     if not classes:
         print("\n[Warning] No classes defined in models_config.yaml.")
     else:
         print("\n--- Class & Key-bindings ---")
-        # Replicate color generation from labeler for display consistency
         colors = {c: ((c*55+50)%256, (c*95+100)%256, (c*135+150)%256) for c in classes.keys()}
-        print(f"{'Key':<5} {'Name':<25} {'Color (BGR)'}")
-        print("-"*50)
-        for class_id, name in classes.items():
-            key = class_id + 1
-            if 1 <= key <= 9:
-                print(f"{key:<5} {name:<25} {colors.get(class_id)}")
-        print("-"*50)
+        print(f"{'Key':<5} {'ID':<5} {'Name':<25} {'Color (BGR)'}")
+        print("-"*65)
+        for key, class_id, name in class_hotkeys:
+            print(f"{key:<5} {class_id:<5} {name:<25} {colors.get(class_id)}")
+        if class_hotkeys and len(class_hotkeys) < len(classes):
+            print("(Only the first 9 classes are mapped to number keys 1-9.)")
+        print("-"*65)
 
     print("Other Keys: (W) Draw | (E) Delete | (A) Prev | (D) Next | (F) Flag for Review | (Q) Quit")
     print_cancel_message()
@@ -585,6 +587,12 @@ def main():
         print("[WARNING] models_config.yaml not found. Using default model settings.")
         config = {}
     except yaml.YAMLError as e: print(f"[Error] Failed to parse models_config.yaml: {e}"); sys.exit(1)
+
+    if not isinstance(config, dict):
+        config = {}
+
+    model_configs = config.setdefault('model_configurations', {})
+    model_configs['classes'] = normalize_class_map(model_configs.get('classes'))
 
     actions = {
         '1': run_extract_from_bag,

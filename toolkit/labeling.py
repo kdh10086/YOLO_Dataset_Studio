@@ -9,7 +9,7 @@ import torch
 from ultralytics import YOLO
 from tqdm import tqdm
 
-from toolkit.utils import get_label_path
+from toolkit.utils import build_class_hotkeys, get_label_path, normalize_class_map
 
 class IntegratedLabeler:
     """
@@ -20,13 +20,41 @@ class IntegratedLabeler:
         # --- Core Setup ---
         self.dataset_dir = dataset_dir
         self.config = config
-        self.classes = config.get('model_configurations', {}).get('classes', {0: 'object'})
+
+        raw_classes = config.get('model_configurations', {}).get('classes', {0: 'object'})
+        normalized_classes = normalize_class_map(raw_classes)
+        if not normalized_classes:
+            if raw_classes:
+                try:
+                    from collections.abc import Mapping, Iterable
+                    if isinstance(raw_classes, Mapping):
+                        fallback_iter = raw_classes.values()
+                    elif isinstance(raw_classes, Iterable) and not isinstance(raw_classes, (str, bytes)):
+                        fallback_iter = raw_classes
+                    else:
+                        fallback_iter = []
+                except Exception:
+                    fallback_iter = []
+
+                normalized_classes = {idx: str(name) for idx, name in enumerate(fallback_iter)}
+            if not normalized_classes:
+                normalized_classes = {0: 'object'}
+        self.classes = normalized_classes
+
+        self.class_hotkeys = build_class_hotkeys(self.classes)
+        self.hotkey_to_class = {key: class_id for key, class_id, _ in self.class_hotkeys}
+
+        default_class = next(iter(self.classes)) if self.classes else 0
+        if self.hotkey_to_class:
+            default_class = self.hotkey_to_class.get(1, default_class)
+
         # Generate distinct colors for each class
         self.colors = {c: ((c*55+50)%256, (c*95+100)%256, (c*135+150)%256) for c in self.classes.keys()}
 
         # --- Image and Data State ---
         self.image_paths, self.filtered_image_indices = [], []
-        self.img_index, self.current_class_id = 0, 0
+        self.img_index = 0
+        self.current_class_id = default_class
         self.current_bboxes, self.review_list, self.history = [], set(), []
         self.bbox_precise = []
         self.img_orig, self.display_img, self.clone = None, None, None
@@ -630,15 +658,16 @@ class IntegratedLabeler:
                             print("-> Pasted last bounding box.")
                             self._update_overlap_counts()
                 elif ord('1') <= key_char <= ord('9'):
-                    class_id = int(chr(key_char)) - 1
-                    if class_id in self.classes:
-                        self.current_class_id = class_id
-                        print(f"Current class set to: {self.classes.get(self.current_class_id, 'N/A')}")
+                    pressed_key = int(chr(key_char))
+                    mapped_class = self.hotkey_to_class.get(pressed_key)
+                    if mapped_class is not None:
+                        self.current_class_id = mapped_class
+                        print(f"Current class set to: {self.classes.get(self.current_class_id, 'N/A')} (ID {self.current_class_id})")
                         if self.mode == 'delete':
                             self.mode = 'draw'
                             print("-> Switched to Draw Mode")
                     else:
-                        print(f"[Warning] Class ID {class_id} is not defined in config.")
+                        print(f"[Warning] No class is mapped to number key {pressed_key}.")
                 elif key_lower == 'w': self.mode = 'draw'
                 elif key_lower == 'e': self.mode = 'delete'
                 elif key_lower == 'f': # Flag for review
