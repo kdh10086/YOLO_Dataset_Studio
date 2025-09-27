@@ -375,9 +375,39 @@ def extract_frames_from_video(video_path, output_dir, image_formats, mode=0):
     print(f"\nExtraction finished. {saved_count} images saved.")
     return True
 
-def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
-    """Splits a dataset into multiple subsets based on given ratios, supporting flexible structures."""
-    # Robustly find all images within any 'images' subdirectory
+def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats, output_dir=None, exist_ok=False):
+    """Split a dataset into train/val(/test) subsets with flexible output control.
+
+    Args:
+        dataset_dir (str): Source dataset root containing an ``images`` directory.
+        ratios (dict[str, int]): Ratio mapping (values must sum to > 0).
+        class_names: Mapping or iterable of class labels for ``data.yaml``.
+        image_formats (Iterable[str]): Image extensions to scan for.
+        output_dir (str | None): Destination dataset root. If ``None`` the source
+            dataset is modified in place. When provided, files are copied to the
+            destination, leaving the source untouched.
+        exist_ok (bool): Overwrite the destination directory when ``output_dir``
+            is provided and already exists.
+    """
+
+    source_root = Path(dataset_dir).resolve()
+    target_root = Path(output_dir).resolve() if output_dir else source_root
+    in_place = target_root == source_root
+
+    if not source_root.exists():
+        print(f"[Error] Source dataset path does not exist: {source_root}")
+        return False
+
+    if not in_place:
+        if target_root.exists():
+            if exist_ok:
+                shutil.rmtree(target_root)
+            else:
+                print(f"[Error] Output directory already exists: {target_root}")
+                return False
+        target_root.mkdir(parents=True, exist_ok=True)
+
+    # Locate image-label pairs under any directory named 'images'
     all_image_files = sorted([
         p for ext in image_formats
         for p in glob.glob(os.path.join(dataset_dir, '**', f'*.{ext}'), recursive=True)
@@ -392,27 +422,19 @@ def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
     subsets = list(ratios.keys())
     example_subsets = ",".join(subsets)
     print("\nPlease choose the desired output directory structure:")
-    print(f"1: {dataset_dir}/images/{{{example_subsets}}}, {dataset_dir}/labels/{{{example_subsets}}}")
-    print(f"2: {dataset_dir}/{{{example_subsets}}}/images, {dataset_dir}/{{{example_subsets}}}/labels")
+    print(f"1: {target_root}/images/{{{example_subsets}}}, {target_root}/labels/{{{example_subsets}}}")
+    print(f"2: {target_root}/{{{example_subsets}}}/images, {target_root}/{{{example_subsets}}}/labels")
     choice = input("Enter your choice (1 or 2): ")
     while choice not in ['1', '2']:
         choice = input("Invalid input. Please enter 1 or 2: ")
     structure_type = int(choice)
-    
-    # Create output directories based on chosen structure
-    if structure_type == 1:
-        for sub in subsets:
-            os.makedirs(os.path.join(dataset_dir, 'images', sub), exist_ok=True)
-            os.makedirs(os.path.join(dataset_dir, 'labels', sub), exist_ok=True)
-    else:  # structure_type == 2
-        for sub in subsets:
-            os.makedirs(os.path.join(dataset_dir, sub, 'images'), exist_ok=True)
-            os.makedirs(os.path.join(dataset_dir, sub, 'labels'), exist_ok=True)
 
-    valid_pairs = [p for p in image_paths if os.path.exists(get_label_path(p))]
+    # Build list of image/label pairs that actually exist
+    valid_pairs = [(img, get_label_path(img)) for img in image_paths if os.path.exists(get_label_path(img))]
     if not valid_pairs:
         print("[Warning] No valid image-label pairs found to split.")
         return False
+
     random.shuffle(valid_pairs)
     total_ratio = sum(ratios.values())
     if total_ratio <= 0:
@@ -420,53 +442,107 @@ def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats):
         return False
     normalized_ratios = {k: v / total_ratio for k, v in ratios.items()}
 
-    def move_pair(file_path, subset):
+    def contains_source_items(target_dir_path: Path, index: int) -> bool:
         try:
-            label_path = get_label_path(file_path)
-            if structure_type == 1:
-                img_dest = os.path.join(dataset_dir, 'images', subset, os.path.basename(file_path))
-                lbl_dest = os.path.join(dataset_dir, 'labels', subset, os.path.basename(label_path))
-            else:  # structure_type == 2
-                img_dest = os.path.join(dataset_dir, subset, 'images', os.path.basename(file_path))
-                lbl_dest = os.path.join(dataset_dir, subset, 'labels', os.path.basename(label_path))
-            
-            shutil.move(file_path, img_dest)
-            shutil.move(label_path, lbl_dest)
+            target_resolved = target_dir_path.resolve()
         except FileNotFoundError:
-            print(f"[Warning] Could not find image or label for: {os.path.basename(file_path)}")
+            return False
+        for pair in valid_pairs:
+            src_path = Path(pair[index])
+            try:
+                if src_path.resolve().is_relative_to(target_resolved):
+                    return True
+            except FileNotFoundError:
+                continue
+        return False
 
+    subset_destinations: dict[str, tuple[Path, Path]] = {}
+    for subset in subsets:
+        if structure_type == 1:
+            img_dir = target_root / 'images' / subset
+            lbl_dir = target_root / 'labels' / subset
+        else:
+            img_dir = target_root / subset / 'images'
+            lbl_dir = target_root / subset / 'labels'
+
+        # Avoid removing directories that contain the source files when operating in place
+        if img_dir.exists() and not (in_place and contains_source_items(img_dir, 0)):
+            shutil.rmtree(img_dir)
+        if lbl_dir.exists() and not (in_place and contains_source_items(lbl_dir, 1)):
+            shutil.rmtree(lbl_dir)
+
+        img_dir.mkdir(parents=True, exist_ok=True)
+        lbl_dir.mkdir(parents=True, exist_ok=True)
+        subset_destinations[subset] = (img_dir, lbl_dir)
+
+    # Determine assignments per subset according to ratios
+    assignments: dict[str, list[tuple[str, str]]] = {subset: [] for subset in subsets}
     start_index = 0
     num_files = len(valid_pairs)
     for i, (subset, ratio) in enumerate(normalized_ratios.items()):
         end_index = num_files if i == len(normalized_ratios) - 1 else start_index + int(num_files * ratio)
-        
-        files_to_move = valid_pairs[start_index:end_index]
-        print(f"Moving {len(files_to_move)} pairs to '{subset}'...")
-        for p in tqdm(files_to_move, desc=f"Moving {subset} files"):
-            move_pair(p, subset)
+        assignments[subset] = valid_pairs[start_index:end_index]
         start_index = end_index
 
-    # Create data.yaml based on chosen structure
-    yaml_path = os.path.join(dataset_dir, 'data.yaml')
+    for subset, pairs in assignments.items():
+        dest_img_dir, dest_lbl_dir = subset_destinations[subset]
+        print(f"Moving {len(pairs)} pairs to '{subset}'...")
+        for img_path, lbl_path in tqdm(pairs, desc=f"Processing {subset} files"):
+            src_img = Path(img_path)
+            src_lbl = Path(lbl_path)
+            dest_img = dest_img_dir / src_img.name
+            dest_lbl = dest_lbl_dir / src_lbl.name
+
+            if in_place:
+                if src_img.resolve() != dest_img.resolve():
+                    shutil.move(str(src_img), dest_img)
+                if src_lbl.resolve() != dest_lbl.resolve():
+                    shutil.move(str(src_lbl), dest_lbl)
+            else:
+                shutil.copy2(str(src_img), dest_img)
+                shutil.copy2(str(src_lbl), dest_lbl)
+
+    if in_place and structure_type == 2:
+        for legacy_name in ('images', 'labels'):
+            legacy_dir = source_root / legacy_name
+            if legacy_dir.exists():
+                try:
+                    shutil.rmtree(legacy_dir)
+                except OSError as exc:
+                    print(f"[Warning] Failed to remove legacy directory '{legacy_dir}': {exc}")
+
+    yaml_path = target_root / 'data.yaml'
     if structure_type == 1:
         train_path = os.path.join('images', 'train')
         val_path = os.path.join('images', 'val')
         test_path = os.path.join('images', 'test') if 'test' in subsets else None
-    else:  # structure_type == 2
+    else:
         train_path = os.path.join('train', 'images')
         val_path = os.path.join('val', 'images')
         test_path = os.path.join('test', 'images') if 'test' in subsets else None
 
+    if isinstance(class_names, dict):
+        sorted_items = sorted(class_names.items())
+        names_list = [str(name) for _, name in sorted_items]
+    else:
+        names_list = [str(name) for name in list(class_names)]
+
     data = {
-        'path': os.path.abspath(dataset_dir), 'train': train_path, 'val': val_path,
-        'names': [n for _, n in sorted(class_names.items())]
+        'path': str(target_root.resolve()),
+        'train': train_path,
+        'val': val_path,
+        'names': names_list,
     }
-    if test_path: data['test'] = test_path
-    
+    if test_path:
+        data['test'] = test_path
+
     with open(yaml_path, 'w') as f:
         yaml.dump(data, f, sort_keys=False, default_flow_style=False)
 
-    print("Dataset split complete.")
+    if in_place:
+        print(f"Dataset split complete in-place at: {source_root}")
+    else:
+        print(f"Dataset split complete. New dataset created at: {target_root}")
     return True
 
 def merge_datasets(input_dirs, output_dir, image_formats, exist_ok=False, strategy='flatten', base_dataset=None):

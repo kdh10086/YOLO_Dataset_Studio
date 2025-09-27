@@ -383,7 +383,61 @@ def run_split_dataset():
     print_cancel_message()
 
     dataset_dir = get_dataset_from_user("Select a dataset to split")
-    if dataset_dir == 'c' or not dataset_dir: return
+    if dataset_dir == 'c' or not dataset_dir:
+        return
+
+    destination_choice = None
+    while destination_choice is None:
+        dest_input = get_input(
+            "Save split dataset to which location? [1] Overwrite selected dataset, [2] Create new dataset under 'datasets/'",
+            default='1'
+        )
+        if dest_input == 'c':
+            return
+        if dest_input in ('1', '2'):
+            destination_choice = dest_input
+        else:
+            print("[Error] Invalid selection. Please enter '1' or '2'.")
+
+    output_dir = None
+    exist_ok = False
+    if destination_choice == '2':
+        os.makedirs(BASE_DATASET_PATH, exist_ok=True)
+        source_path = Path(dataset_dir).resolve()
+
+        while True:
+            dataset_name = get_input("Enter a name for the new split dataset")
+            if dataset_name == 'c':
+                return
+            if not dataset_name:
+                print("[Error] Dataset name cannot be empty.")
+                continue
+
+            candidate_dir = Path(BASE_DATASET_PATH) / dataset_name
+            candidate_resolved = candidate_dir.resolve()
+            if candidate_resolved == source_path:
+                print("[Error] New dataset path matches the source dataset. Choose a different name or select option [1].")
+                continue
+
+            if candidate_dir.exists():
+                overwrite_choice = get_input(
+                    f"Directory '{candidate_dir}' exists. Overwrite? (y/N)",
+                    default='n'
+                )
+                if overwrite_choice == 'c':
+                    return
+                if overwrite_choice.lower() == 'y':
+                    exist_ok = True
+                    output_dir = str(candidate_dir)
+                    break
+                print("Please choose a different name.")
+                continue
+
+            output_dir = str(candidate_dir)
+            break
+
+        if output_dir:
+            print(f"-> Split dataset will be saved to: {output_dir}")
 
     ratios = get_split_ratios_from_user()
     if ratios == 'c':
@@ -399,7 +453,14 @@ def run_split_dataset():
         print("\n[Error] Missing 'classes' in settings.yaml.")
         return
 
-    data_handler.split_dataset_for_training(dataset_dir, ratios, classes, fmts)
+    data_handler.split_dataset_for_training(
+        dataset_dir,
+        ratios,
+        classes,
+        fmts,
+        output_dir=output_dir,
+        exist_ok=exist_ok
+    )
 
 def run_unified_training():
     print("\n--- Train a Model ---")
