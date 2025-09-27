@@ -23,8 +23,13 @@ pip install -e .[dev]
 ```
 
 ## Configure Models & Workflow
-- Edit `settings.yaml` to define class IDs, YOLO architectures for teacher/student roles, training hyperparameters, and workflow parameters (image formats, auto-label thresholds, active-learning settings, etc.).
+- Edit `settings.yaml` (located at the repository root; the CLI searches both the launch directory and the project folder) to define class IDs, YOLO architectures for teacher/student roles, training hyperparameters, and workflow parameters.
 - All dataset paths are supplied interactively at runtime, so keep paths absolute when prompted to avoid confusion across shells.
+
+`settings.yaml` schema highlights:
+- **`model_configurations.classes`** – map numeric IDs to class names used throughout labeling, training, and evaluation. These populate the labeling tool hotkeys (1–9).
+- **`model_configurations.teacher_model_config` / `student_model_config`** – select YOLO architectures (`model_name`) and provide per-model hyperparameters. Under `hyperparameters.models` you can override `batch_size` and `img_size` for specific architectures while `epochs`/`patience` apply globally to the role.
+- **`workflow_parameters`** – tune shared behaviours such as supported image formats (`image_format`), ROS topic defaults (`ros2_image_topic`), auto-labeling thresholds (`auto_label_confidence_threshold`), active-learning selection sizing/confidence band (`active_learning_*`), and dataset sampling ratios (`sampling_tool_ratio`).
 
 ## Launch the CLI
 ```bash
