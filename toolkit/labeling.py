@@ -60,6 +60,9 @@ class IntegratedLabeler:
         self.img_orig, self.display_img, self.clone = None, None, None
         self.h_orig, self.w_orig, self.ratio = 0, 0, 1.0
 
+        # --- Display Preferences ---
+        self.show_class_names = False
+
         # --- UI State ---
         self.quit_flag = False
         self.mode, self.filter_mode = 'draw', 'all'
@@ -337,6 +340,28 @@ class IntegratedLabeler:
         for cid, x1, y1, x2, y2 in self.current_bboxes:
             color = self.colors.get(cid, (0, 255, 0))
             cv2.rectangle(self.clone, (int(x1 * self.ratio), int(y1 * self.ratio)), (int(x2 * self.ratio), int(y2 * self.ratio)), color, 2)
+            if self.show_class_names:
+                label = self.classes.get(cid, f"{cid}")
+                if label:
+                    text_scale = 0.6
+                    text_thickness = 2
+                    (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, text_scale, text_thickness)
+                    draw_x = int(x2 * self.ratio) - text_w - 4
+                    draw_y = int(y1 * self.ratio) + text_h + 4
+                    draw_x = max(0, min(draw_x, w - text_w - 4))
+                    if draw_y + baseline > h:
+                        draw_y = h - baseline - 2
+
+                    cv2.putText(
+                        self.clone,
+                        label,
+                        (draw_x, draw_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        text_scale,
+                        color,
+                        text_thickness,
+                        cv2.LINE_AA
+                    )
 
         for (x1, y1, x2, y2), count in self._overlap_markers.items():
             text_pos_x = int(round(x2 * self.ratio)) - 10
@@ -564,6 +589,7 @@ class IntegratedLabeler:
         print("  - [Arrow Keys]: Nudge Most Recent Bounding Box")
         print("  - [T/Y]: Grow/Shrink Most Recent Bounding Box")
         print("  - [1-9]: Select Class")
+        print("  - [I]: Toggle Class Name Overlay")
         print("-" * 50)
         print(" Navigation & Saving:")
         print("  - [D]: Save & Next Image")
@@ -670,6 +696,10 @@ class IntegratedLabeler:
                         print(f"[Warning] No class is mapped to number key {pressed_key}.")
                 elif key_lower == 'w': self.mode = 'draw'
                 elif key_lower == 'e': self.mode = 'delete'
+                elif key_lower == 'i':
+                    self.show_class_names = not self.show_class_names
+                    state = 'ON' if self.show_class_names else 'OFF'
+                    print(f"Class name overlay toggled {state}.")
                 elif key_lower == 'f': # Flag for review
                     n = os.path.basename(self.image_paths[self.img_index])
                     if n in self.review_list: self.review_list.remove(n)

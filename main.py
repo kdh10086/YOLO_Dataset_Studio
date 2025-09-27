@@ -341,7 +341,7 @@ def run_labeling_tool():
             print("(Only the first 9 classes are mapped to number keys 1-9.)")
         print("-"*65)
 
-    print("Other Keys: (W) Draw | (E) Delete | (A) Prev | (D) Next | (F) Flag for Review | (Q) Quit")
+    print("Other Keys: (W) Draw | (E) Delete | (A) Prev | (D) Next | (I) Toggle Class Names | (F) Flag for Review | (Q) Quit")
     print_cancel_message()
 
     dataset_dir = get_dataset_from_user("Select a dataset to label/review")
