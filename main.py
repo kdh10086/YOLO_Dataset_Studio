@@ -62,8 +62,10 @@ def get_input(prompt, default=None):
 
     return user_input or default if default is not None else user_input
 
-def get_sanitized_path_input(prompt, default=None):
+def get_sanitized_path_input(prompt, default=None, show_drag_tip=False):
     """Gets a path from user input, automatically stripping quotes."""
+    if show_drag_tip:
+        print("-> Tip: Drag a folder or file from your file explorer into this window to auto-fill the absolute path.")
     path_str = get_input(prompt, default)
     if path_str in ['c', '', None]:
         return path_str
@@ -145,7 +147,7 @@ def _prompt_for_new_dataset_path():
     """Helper function to prompt for, validate, and register a new dataset path."""
     print_cancel_message()
     while True:
-        path_str = get_sanitized_path_input("Enter the absolute path to the dataset directory")
+        path_str = get_sanitized_path_input("Enter the absolute path to the dataset directory", show_drag_tip=True)
 
         if path_str == 'c':
             return 'c'
@@ -250,7 +252,7 @@ def run_extract_from_bag():
     print("Extracts images from a ROS2 bag file. Can run in fully automatic or interactive modes.")
     print_cancel_message()
 
-    rosbag_dir = get_sanitized_path_input("Enter path to ROS Bag directory")
+    rosbag_dir = get_sanitized_path_input("Enter path to ROS Bag directory", show_drag_tip=True)
     if rosbag_dir == 'c' or not rosbag_dir: return
     if not os.path.isdir(rosbag_dir): print(f"\n[Error] Directory not found: {rosbag_dir}"); return
 
@@ -286,7 +288,7 @@ def run_extract_from_video():
     print("Convert standard video files (e.g., mp4, avi, mov, mkv) into YOLO-ready image datasets.")
     print_cancel_message()
 
-    video_path = get_sanitized_path_input("Enter path to the video file")
+    video_path = get_sanitized_path_input("Enter path to the video file", show_drag_tip=True)
     if video_path == 'c' or not video_path:
         return
     if not os.path.isfile(video_path):
