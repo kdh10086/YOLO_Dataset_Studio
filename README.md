@@ -23,7 +23,7 @@ pip install -e .[dev]
 ```
 
 ## Configure Models & Workflow
-- Edit `models_config.yaml` to define class IDs, YOLO architectures for teacher/student roles, training hyperparameters, and workflow parameters (image formats, auto-label thresholds, active-learning settings, etc.).
+- Edit `settings.yaml` to define class IDs, YOLO architectures for teacher/student roles, training hyperparameters, and workflow parameters (image formats, auto-label thresholds, active-learning settings, etc.).
 - All dataset paths are supplied interactively at runtime, so keep paths absolute when prompted to avoid confusion across shells.
 
 ## Launch the CLI
@@ -89,7 +89,7 @@ main.py                                       # CLI entry point and menu routing
 toolkit/data_handler.py                       # Extraction, splitting, merging, sampling utilities
 toolkit/labeling.py                           # Integrated labeling GUI and auto-label helper
 toolkit/training.py                           # YOLO training orchestration with progress callbacks
-models_config.yaml                            # Classes, model configs, workflow defaults
+settings.yaml                                 # Classes, model configs, workflow defaults
 examples/quickstart.py                        # Demo script to bootstrap a workspace
 tests/test_smoke.py                           # Packaging smoke test
 ```
@@ -98,4 +98,3 @@ tests/test_smoke.py                           # Packaging smoke test
 - Run smoke tests with `pytest`.
 - `examples/quickstart.py` scaffolds an empty dataset directory and launches the CLI for first-time demos.
 - Contributions should keep edits within ASCII unless an existing file uses otherwise.
-

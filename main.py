@@ -74,6 +74,7 @@ def get_sanitized_path_input(prompt, default=None):
 registered_datasets = []
 config = {}
 BASE_DATASET_PATH = "datasets" # Base directory for new datasets
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -329,7 +330,7 @@ def run_labeling_tool():
     class_hotkeys = build_class_hotkeys(classes)
 
     if not classes:
-        print("\n[Warning] No classes defined in models_config.yaml.")
+        print("\n[Warning] No classes defined in settings.yaml.")
     else:
         print("\n--- Class & Key-bindings ---")
         colors = {c: ((c*55+50)%256, (c*95+100)%256, (c*135+150)%256) for c in classes.keys()}
@@ -393,7 +394,7 @@ def run_split_dataset():
     fmts = workflow_params.get('image_format', 'png,jpg,jpeg').split(',')
 
     if not classes:
-        print("\n[Error] Missing 'classes' in models_config.yaml.")
+        print("\n[Error] Missing 'classes' in settings.yaml.")
         return
 
     data_handler.split_dataset_for_training(dataset_dir, ratios, classes, fmts)
@@ -581,12 +582,28 @@ def main():
     # Create the base datasets directory on startup if it doesn't exist
     os.makedirs(BASE_DATASET_PATH, exist_ok=True)
 
-    try:
-        with open('models_config.yaml', 'r') as f: config = yaml.safe_load(f)
-    except FileNotFoundError:
-        print("[WARNING] models_config.yaml not found. Using default model settings.")
+    search_candidates = [
+        Path.cwd() / "settings.yaml",
+        PROJECT_ROOT / "settings.yaml",
+        Path.cwd() / "models_config.yaml",
+        PROJECT_ROOT / "models_config.yaml",
+    ]
+
+    config_path = next((c for c in search_candidates if c.exists()), None)
+
+    if not config_path:
+        print("[WARNING] settings.yaml not found. Using default model settings.")
         config = {}
-    except yaml.YAMLError as e: print(f"[Error] Failed to parse models_config.yaml: {e}"); sys.exit(1)
+    else:
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f) or {}
+        except yaml.YAMLError as e:
+            print(f"[Error] Failed to parse {config_path}: {e}")
+            sys.exit(1)
+
+        if config_path.name == "models_config.yaml":
+            print("[INFO] Loaded legacy models_config.yaml. Please rename it to settings.yaml.")
 
     if not isinstance(config, dict):
         config = {}

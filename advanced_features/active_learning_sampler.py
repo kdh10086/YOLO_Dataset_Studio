@@ -15,7 +15,7 @@ from tqdm import tqdm
 # Initiation Settings
 # ==============================================================================
 # These global variables define default parameters for the active learning sampler.
-# They can be overridden by command-line arguments or settings in models_config.yaml.
+# They can be overridden by command-line arguments or settings in settings.yaml.
 
 # Default path to the source directory containing the unlabeled image pool.
 INIT_SOURCE_DIR = None
