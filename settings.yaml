@@ -17,16 +17,15 @@ model_configurations:
   classes:
     0: 'green light'
     1: 'red light'
-    2: 'unknown light'
 
   # Configuration for the Teacher model, which is used to generate pseudo-labels.
   teacher_model_config:
     # The name of the YOLO model architecture to use (e.g., 'yolov8n', 'yolov10m').
-    model_name: 'yolov10m'
+    model_name: 'yolov10s'
     # Hyperparameters for training the Teacher model.
     hyperparameters:
-      epochs: 1000
-      patience: 50
+      epochs: 300
+      patience: 30
       # Model-specific parameters. The script will use 'default' if the specified
       # model_name is not found in this list.
       models:
@@ -78,6 +77,9 @@ workflow_parameters:
 
   # The confidence score threshold for auto-labeling.
   auto_label_confidence_threshold: 0.3
+
+  # IoU threshold used by the integrated labeler to flag overlapping boxes.
+  labeling_overlap_iou_threshold: 0.6
 
   # The final number of images to select during the Active Learning process.
   active_learning_selection_size: 100

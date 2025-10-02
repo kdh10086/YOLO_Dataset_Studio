@@ -191,7 +191,7 @@ def get_dataset_from_user(prompt="Select a dataset to use (by number)"):
             # If user cancels adding a new path, we just re-prompt for selection.
             # We can't return 'c' here as it would cancel the parent operation.
             # Instead, we let the loop start over.
-            print("\nReturning to dataset selection...")
+            print("\nReturning to dataset selecti==on...")
             # Re-display the (potentially updated) list
             print("\n--- Registered Datasets ---")
             for i, path in enumerate(registered_datasets, 1):
@@ -212,27 +212,60 @@ def get_dataset_from_user(prompt="Select a dataset to use (by number)"):
 
 def get_multiple_datasets_from_user():
     if not registered_datasets:
-        print("\n[Error] No datasets registered.")
-        return []
+        print("\n[Info] No datasets registered yet. Add a dataset path to begin.")
 
-    selected_datasets = []
+    selected_datasets: list[str] = []
+
     while True:
-        print("\n--- Select datasets to merge (enter 'c' to finish) ---")
-        for i, path in enumerate(registered_datasets, 1):
-            print(f"  <{i}> {path} {'(selected)' if path in selected_datasets else ''}")
+        print("\n--- Select datasets to merge ---")
+        if not registered_datasets:
+            print("  (no registered datasets)")
+        else:
+            for i, path in enumerate(registered_datasets, 1):
+                marker = "*" if path in selected_datasets else " "
+                print(f"  <{i}>[{marker}] {path}")
 
-        choice_str = get_input("Enter number to add/remove (or press Enter to finish)")
-        if choice_str == 'c' or choice_str == '':
+        print("\nInstructions: Enter dataset numbers to toggle (e.g., '1 3'), 'add' to register a new path, 'done' or Enter to finish, or 'c' to cancel.")
+        choice_str = get_input("Selection")
+
+        if choice_str == 'c':
+            return 'c'
+
+        if choice_str.strip() == '' or choice_str.lower() == 'done':
             break
 
-        try:
-            path = registered_datasets[int(choice_str) - 1]
+        if choice_str.lower() == 'add':
+            new_path = _prompt_for_new_dataset_path()
+            if new_path not in ('c', None):
+                if new_path not in selected_datasets:
+                    selected_datasets.append(new_path)
+            continue
+
+        tokens = [token for token in choice_str.replace(',', ' ').split() if token]
+        if not tokens:
+            print("[Error] Please enter a valid selection.")
+            continue
+
+        valid = True
+        for token in tokens:
+            try:
+                index = int(token) - 1
+                if index < 0:
+                    raise ValueError
+                path = registered_datasets[index]
+            except (ValueError, IndexError):
+                print(f"[Error] Invalid selection '{token}'.")
+                valid = False
+                break
+
             if path in selected_datasets:
                 selected_datasets.remove(path)
             else:
                 selected_datasets.append(path)
-        except (ValueError, IndexError):
-            print("[Error] Invalid selection.")
+
+        if not valid:
+            continue
+
     return selected_datasets
 
 def add_dataset_directory():
@@ -353,29 +386,46 @@ def run_labeling_tool():
     print("\nLaunching labeler... Close the labeling window to return to the menu.")
     labeling.launch_labeler(dataset_dir, config)
 
-def get_split_ratios_from_user():
+def get_split_ratios_from_user(expected_subsets=None):
     """Interactively prompts the user to enter split ratios that sum to 10."""
+    subset_sequence = list(expected_subsets) if expected_subsets else None
+
     while True:
-        prompt = "Enter split ratios for train, val, and optionally test (e.g., '7 3' or '6 2 2'). The sum must be 10."
+        if subset_sequence:
+            names = ", ".join(subset_sequence)
+            prompt = f"Enter split ratios for {names} (sum must be 10). Example: '7 3'"
+        else:
+            prompt = "Enter split ratios for train, val, and optionally test (e.g., '7 3' or '6 2 2'). The sum must be 10."
+
         ratios_str = get_input(prompt)
         if ratios_str == 'c':
             return 'c'
 
         try:
             parts = [int(p) for p in ratios_str.split()]
+        except ValueError:
+            print("\n[Error] Invalid input. Please enter space-separated integers.")
+            continue
+
+        if subset_sequence:
+            if len(parts) != len(subset_sequence):
+                print(f"\n[Error] Expected {len(subset_sequence)} values for {', '.join(subset_sequence)}.")
+                continue
             if sum(parts) != 10:
                 print(f"\n[Error] The sum of the ratios must be 10, but got {sum(parts)}. Please try again.")
                 continue
+            return {subset_sequence[i]: parts[i] for i in range(len(subset_sequence))}
 
-            if len(parts) == 2:
-                return {'train': parts[0], 'val': parts[1]}
-            elif len(parts) == 3:
-                return {'train': parts[0], 'val': parts[1], 'test': parts[2]}
-            else:
-                print("\n[Error] Please enter 2 or 3 numbers (e.g., for train/val or train/val/test). Please try again.")
-                continue
-        except ValueError:
-            print("\n[Error] Invalid input. Please enter space-separated numbers (e.g., '7 3').")
+        if sum(parts) != 10:
+            print(f"\n[Error] The sum of the ratios must be 10, but got {sum(parts)}. Please try again.")
+            continue
+
+        if len(parts) == 2:
+            return {'train': parts[0], 'val': parts[1]}
+        if len(parts) == 3:
+            return {'train': parts[0], 'val': parts[1], 'test': parts[2]}
+
+        print("\n[Error] Please enter 2 or 3 numbers (e.g., for train/val or train/val/test). Please try again.")
 
 def run_split_dataset():
     print("\n--- Split Dataset for Training ---")
@@ -483,7 +533,8 @@ def run_unified_training():
     if not model_name: print(f"[Error] Could not find model name for '{model_config_name}' in config."); return
 
     dataset_name = os.path.basename(os.path.normpath(dataset_path))
-    run_name = f"{role}_{model_name}_{dataset_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    run_name = f"{role}_{model_name}_{timestamp}_{dataset_name}"
     print(f"\nGenerated Run Name: {run_name}")
 
     exist_ok_str = get_input("Overwrite previous run with same name? (y/N)", default='n')
@@ -531,60 +582,186 @@ def run_auto_labeler():
     print(f"\nUsing model: {weights_path}")
     labeling.auto_label_dataset(dataset_path, weights_path, config)
 
+
+def _print_merge_dataset_summary(profiles):
+    print("\n--- Source Dataset Summary ---")
+    for idx, profile in enumerate(profiles, 1):
+        ratio_map = profile.ratio_map()
+        subset_descriptions = []
+        for subset in data_handler.STANDARD_SUBSETS:
+            if subset in profile.subset_pairs:
+                count = len(profile.subset_pairs[subset])
+                percent = ratio_map.get(subset, 0.0) * 100
+                subset_descriptions.append(f"{subset}: {count} ({percent:.1f}%)")
+
+        print(f"[{idx}] {profile.path}")
+        print(f"    structure: {profile.structure}")
+        print(f"    total pairs: {profile.total_pairs}")
+        if subset_descriptions:
+            print(f"    splits: {', '.join(subset_descriptions)}")
+        if profile.missing_labels:
+            print(f"    missing labels ignored: {profile.missing_labels}")
+        if profile.unassigned_pairs:
+            print(f"    pairs outside standard splits: {len(profile.unassigned_pairs)}")
+        if profile.extra_subsets:
+            extras = ', '.join(f"{name} ({count})" for name, count in profile.extra_subsets.items())
+            print(f"    additional split names detected: {extras}")
+
+
+def _compute_profile_ratio(profile, target_subsets):
+    ratio_map = profile.ratio_map()
+    return {subset: ratio_map.get(subset, 0.0) for subset in target_subsets}
+
+
+def _ratios_close(a, b, tolerance=0.02):
+    for key in a.keys():
+        if abs(a.get(key, 0.0) - b.get(key, 0.0)) > tolerance:
+            return False
+    return True
+
+
+def _normalize_ratio_dict(ratio_dict):
+    total = sum(ratio_dict.values())
+    if total <= 0:
+        return {k: 0.0 for k in ratio_dict}
+    return {k: value / total for k, value in ratio_dict.items()}
+
+
+def _prompt_ratio_plan(profiles, target_subsets, include_test):
+    while True:
+        choice = get_input("Preserve existing split ratios from source datasets? (y/N)", default='y')
+        if choice == 'c':
+            return 'c'
+
+        keep_existing = choice.lower() in ('y', 'yes') or choice == ''
+
+        if keep_existing:
+            if any(profile.unassigned_pairs for profile in profiles):
+                print("\n[Error] Some datasets contain images that are not assigned to 'train', 'val', or 'test'. Configure new ratios instead.")
+                continue
+
+            if include_test and not all(profile.has_subset('test') for profile in profiles):
+                print("\n[Error] Not all datasets include a 'test' split. Configure new ratios or exclude 'test' in the merged dataset.")
+                continue
+
+            if not include_test and any(profile.has_subset('test') for profile in profiles):
+                print("\n[Error] Some datasets include a 'test' split. Configure new ratios to redistribute those samples.")
+                continue
+
+            reference = _compute_profile_ratio(profiles[0], target_subsets)
+            ratios_match = all(
+                _ratios_close(reference, _compute_profile_ratio(profile, target_subsets))
+                for profile in profiles[1:]
+            )
+
+            if not ratios_match:
+                print("\n[Error] Source datasets use differing split ratios. Configure new ratios instead.")
+                continue
+
+            return {'mode': 'preserve', 'reference': reference}
+
+        uniform_choice = get_input("Apply the same split ratios to all datasets? (y/N)", default='y')
+        if uniform_choice == 'c':
+            return 'c'
+
+        apply_uniform = uniform_choice.lower() in ('y', 'yes') or uniform_choice == ''
+
+        if apply_uniform:
+            ratio_values = get_split_ratios_from_user(target_subsets)
+            if ratio_values == 'c':
+                continue
+            normalized = _normalize_ratio_dict(ratio_values)
+            return {'mode': 'uniform', 'ratios': normalized}
+
+        per_dataset = {}
+        for profile in profiles:
+            print(f"\n--- Configure ratios for {profile.path} ---")
+            ratio_values = get_split_ratios_from_user(target_subsets)
+            if ratio_values == 'c':
+                per_dataset = None
+                break
+            per_dataset[profile.path] = _normalize_ratio_dict(ratio_values)
+
+        if per_dataset is None:
+            continue
+
+        return {'mode': 'per_dataset', 'ratios': per_dataset}
+
+
 def run_merge_datasets():
     print("\n--- Merge Datasets ---")
     print("Combines multiple datasets into a single new dataset.")
     print_cancel_message()
 
     input_dirs = get_multiple_datasets_from_user()
+    if input_dirs == 'c':
+        return
     if not input_dirs or len(input_dirs) < 2:
         print("\n[Error] Select at least two datasets to merge.")
         return
 
-    # --- Get Merge Strategy ---
-    print("\n--- Select Merge Strategy ---")
-    print("  [1] Flatten Merge: Combine all files into new 'images' and 'labels' folders.")
-    print("  [2] Structured Merge: Preserve the directory structure of a base dataset.")
-    strategy_choice = get_input("Select a strategy", default='1')
-    if strategy_choice == 'c': return
+    fmts = config.get('workflow_parameters', {}).get('image_format', 'png,jpg,jpeg').split(',')
+    profiles = [data_handler.survey_dataset_for_merge(path, fmts) for path in input_dirs]
 
-    strategy = 'flatten'
-    base_dataset = None
+    if any(profile.total_pairs == 0 for profile in profiles):
+        print("\n[Error] One or more datasets do not contain labeled images under an 'images' directory.")
+        return
 
-    if strategy_choice == '2':
-        strategy = 'structured'
-        print("\n--- Select Base Dataset ---")
-        print("The structure of this dataset will be used for the merged output.")
-        for i, path in enumerate(input_dirs, 1):
-            print(f"  <{i}> {path}")
+    _print_merge_dataset_summary(profiles)
 
-        while True:
-            base_choice_str = get_input("Select a base dataset (by number)")
-            if base_choice_str == 'c': return
-            try:
-                choice_int = int(base_choice_str)
-                if 1 <= choice_int <= len(input_dirs):
-                    base_dataset = input_dirs[choice_int - 1]
-                    break
-                else:
-                    print(f"[Error] Invalid selection.")
-            except ValueError:
-                print("[Error] Invalid input. Please enter a number.")
+    include_test_default = 'y' if all(profile.has_subset('test') for profile in profiles) else 'n'
+    while True:
+        include_test_input = get_input("Include 'test' split in merged dataset? (y/N)", default=include_test_default)
+        if include_test_input == 'c':
+            return
+        if include_test_input.lower() in ('y', 'yes', 'n', 'no', ''):
+            include_test = include_test_input.lower() in ('y', 'yes') or include_test_input == '' and include_test_default == 'y'
+            break
+        print("[Error] Please respond with 'y' or 'n'.")
 
-    # --- Get Output Directory ---
+    target_subsets = ['train', 'val'] + (['test'] if include_test else [])
+
+    subset_preview = ', '.join(target_subsets)
+    print("\nSelect output directory structure:")
+    print(f"  [1] images/{{{subset_preview}}} and labels/{{{subset_preview}}}")
+    print(f"  [2] {{{subset_preview}}}/images and {{{subset_preview}}}/labels")
+
+    while True:
+        structure_choice = get_input("Structure option", default='1')
+        if structure_choice == 'c':
+            return
+        if structure_choice in ('1', '2', ''):
+            break
+        print("[Error] Please enter '1' or '2'.")
+
+    target_structure = 'images_first' if structure_choice in ('1', '') else 'subset_first'
+
+    ratio_plan = _prompt_ratio_plan(profiles, target_subsets, include_test)
+    if ratio_plan == 'c':
+        return
+
     dataset_name = get_input("\nEnter a name for the new merged dataset")
-    if dataset_name == 'c' or not dataset_name: return
+    if dataset_name == 'c' or not dataset_name:
+        return
 
     os.makedirs(BASE_DATASET_PATH, exist_ok=True)
     output_dir = os.path.join(BASE_DATASET_PATH, dataset_name)
     print(f"-> Merged dataset will be saved to: {output_dir}")
 
     exist_ok_str = get_input(f"If '{output_dir}' exists, overwrite? (y/N)", default='n')
-    if exist_ok_str == 'c': return
+    if exist_ok_str == 'c':
+        return
     exist_ok = exist_ok_str.lower() == 'y'
 
-    fmts = config.get('workflow_parameters', {}).get('image_format', 'png,jpg,jpeg').split(',')
-    data_handler.merge_datasets(input_dirs, output_dir, fmts, exist_ok, strategy, base_dataset)
+    merge_config = {
+        'profiles': profiles,
+        'target_structure': target_structure,
+        'target_subsets': target_subsets,
+        'ratio_plan': ratio_plan,
+        'include_test': include_test,
+    }
+
+    data_handler.merge_datasets(merge_config, output_dir, exist_ok=exist_ok)
 
 def run_random_sampler():
     print("\n--- Sample from Dataset ---")

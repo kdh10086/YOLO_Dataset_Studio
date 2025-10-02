@@ -2,14 +2,17 @@ import os
 import glob
 import shutil
 import random
+from dataclasses import dataclass, field
 from pathlib import Path
-import yaml
-import time
-import sys
-from tqdm import tqdm
+from typing import Dict, List, Optional, Tuple
+
 import numpy as np
 import subprocess
 import threading
+import time
+import sys
+import yaml
+from tqdm import tqdm
 
 # 이 파일이 toolkit 폴더 안에 있다고 가정하고, utils.py를 찾기 위함입니다.
 # 만약 구조가 다르다면 이 부분을 수정해야 할 수 있습니다.
@@ -21,6 +24,111 @@ except ImportError:
         label_path = str(image_path).replace('images', 'labels', 1)
         base, _ = os.path.splitext(label_path)
         return base + '.txt'
+
+
+STANDARD_SUBSETS: Tuple[str, ...] = ('train', 'val', 'test')
+
+
+@dataclass
+class MergeDatasetProfile:
+    path: str
+    structure: str
+    subset_pairs: Dict[str, List[Tuple[str, str]]] = field(default_factory=dict)
+    unassigned_pairs: List[Tuple[str, str]] = field(default_factory=list)
+    total_pairs: int = 0
+    missing_labels: int = 0
+    extra_subsets: Dict[str, int] = field(default_factory=dict)
+
+    def available_subsets(self) -> List[str]:
+        return [name for name, pairs in self.subset_pairs.items() if pairs]
+
+    def has_subset(self, name: str) -> bool:
+        return bool(self.subset_pairs.get(name))
+
+    def ratio_map(self) -> Dict[str, float]:
+        if not self.total_pairs:
+            return {name: 0.0 for name in self.subset_pairs.keys()}
+        return {name: len(pairs) / self.total_pairs for name, pairs in self.subset_pairs.items()}
+
+
+def _detect_dataset_structure(dataset_path: Path) -> str:
+    images_dir = dataset_path / 'images'
+    has_images_root = images_dir.is_dir()
+    images_subdirs = {child.name for child in images_dir.iterdir()} if has_images_root else set()
+    has_subset_first = any((dataset_path / subset / 'images').is_dir() for subset in STANDARD_SUBSETS)
+    has_images_first = any(sub in STANDARD_SUBSETS for sub in images_subdirs)
+
+    if has_images_first and has_subset_first:
+        return 'mixed'
+    if has_images_first:
+        return 'images_first'
+    if has_subset_first:
+        return 'subset_first'
+    if has_images_root:
+        return 'images_flat'
+    return 'unknown'
+
+
+def _detect_subset_name(image_path: Path) -> Optional[str]:
+    parts = image_path.parts
+    for idx, part in enumerate(parts):
+        if part != 'images':
+            continue
+        if idx + 1 < len(parts) and parts[idx + 1] in STANDARD_SUBSETS:
+            return parts[idx + 1]
+        if idx - 1 >= 0 and parts[idx - 1] in STANDARD_SUBSETS:
+            return parts[idx - 1]
+    return None
+
+
+def survey_dataset_for_merge(dataset_dir: str, image_formats: List[str]) -> MergeDatasetProfile:
+    dataset_path = Path(dataset_dir)
+    subset_pairs: Dict[str, List[Tuple[str, str]]] = {name: [] for name in STANDARD_SUBSETS}
+    unassigned_pairs: List[Tuple[str, str]] = []
+    extra_subsets: Dict[str, int] = {}
+    missing_labels = 0
+
+    normalized_formats = [fmt.strip().lstrip('.') for fmt in image_formats if fmt.strip()]
+    image_paths = []
+    for fmt in normalized_formats:
+        image_paths.extend(dataset_path.glob(f'**/*.{fmt}'))
+
+    seen_images = set()
+    for img_path in sorted(image_paths):
+        if 'images' not in img_path.parts:
+            continue
+        str_img = str(img_path)
+        if str_img in seen_images:
+            continue
+        seen_images.add(str_img)
+
+        label_path = get_label_path(str_img)
+        if not os.path.exists(label_path):
+            missing_labels += 1
+            continue
+
+        subset = _detect_subset_name(img_path)
+        if subset in subset_pairs:
+            subset_pairs[subset].append((str_img, label_path))
+        elif subset is None:
+            unassigned_pairs.append((str_img, label_path))
+        else:
+            extra_subsets[subset] = extra_subsets.get(subset, 0) + 1
+            unassigned_pairs.append((str_img, label_path))
+
+    total_pairs = sum(len(pairs) for pairs in subset_pairs.values()) + len(unassigned_pairs)
+    structure = _detect_dataset_structure(dataset_path)
+
+    profile = MergeDatasetProfile(
+        path=str(dataset_path),
+        structure=structure,
+        subset_pairs=subset_pairs,
+        unassigned_pairs=unassigned_pairs,
+        total_pairs=total_pairs,
+        missing_labels=missing_labels,
+        extra_subsets=extra_subsets,
+    )
+    return profile
 
 def _get_topic_type(bag_dir, topic_name):
     metadata_path = os.path.join(bag_dir, 'metadata.yaml')
@@ -545,83 +653,130 @@ def split_dataset_for_training(dataset_dir, ratios, class_names, image_formats, 
         print(f"Dataset split complete. New dataset created at: {target_root}")
     return True
 
-def merge_datasets(input_dirs, output_dir, image_formats, exist_ok=False, strategy='flatten', base_dataset=None):
-    """Merges multiple datasets using either a 'flatten' or 'structured' strategy."""
-    if os.path.exists(output_dir) and not exist_ok:
-        print(f"[Error] Output directory already exists: {output_dir}")
+def merge_datasets(merge_config, output_dir, exist_ok=False):
+    """Merge datasets using the configuration gathered from the CLI."""
+    profiles: List[MergeDatasetProfile] = merge_config.get('profiles', [])
+    target_structure: str = merge_config.get('target_structure', 'images_first')
+    target_subsets: List[str] = merge_config.get('target_subsets', ['train', 'val'])
+    ratio_plan: Dict[str, object] = merge_config.get('ratio_plan', {'mode': 'preserve'})
+
+    if not profiles:
+        print("[Error] No dataset profiles supplied for merge.")
         return False
-    if os.path.exists(output_dir): shutil.rmtree(output_dir)
-    os.makedirs(output_dir)
 
-    sep = os.path.sep
-
-    if strategy == 'flatten':
-        print("\nRunning Flatten Merge...")
-        out_img = os.path.join(output_dir, 'images'); os.makedirs(out_img)
-        out_lbl = os.path.join(output_dir, 'labels'); os.makedirs(out_lbl)
-        
-        all_files_unfiltered = [p for d in input_dirs for fmt in image_formats for p in glob.glob(os.path.join(d, '**', f'*.{fmt}'), recursive=True)]
-        all_images = sorted([p for p in all_files_unfiltered if f'{sep}images{sep}' in p])
-        
-        c = 0
-        for img_path in tqdm(all_images, desc="Merging and flattening"):
-            lbl_path = get_label_path(img_path)
-            if os.path.exists(lbl_path):
-                ext = os.path.splitext(img_path)[1]
-                new_base = f"{c:06d}"
-                shutil.copy2(img_path, os.path.join(out_img, new_base + ext))
-                shutil.copy2(lbl_path, os.path.join(out_lbl, new_base + '.txt'))
-                c += 1
-        print(f"\nFlatten merge complete. {c} image-label pairs saved.")
-        return True
-
-    elif strategy == 'structured':
-        if not base_dataset or base_dataset not in input_dirs:
-            print("[Error] A valid base dataset must be selected for structured merge.")
-            return False
-        
-        print(f"\nRunning Structured Merge based on '{os.path.basename(base_dataset)}'...")
-        base_path = Path(base_dataset)
-        
-        unfiltered_base_images = [p for fmt in image_formats for p in base_path.glob(f'**/*.{fmt}')]
-        base_images = [p for p in unfiltered_base_images if 'images' in p.parts]
-        
-        rel_img_subdirs = sorted(list(set([p.relative_to(base_path).parent for p in base_images if 'images' in p.parts])))
-
-        if not rel_img_subdirs:
-            print(f"[Error] No image subdirectories found in the base dataset: {base_dataset}")
-            return False
-
-        print(f"Base structure detected: {[str(p) for p in rel_img_subdirs]}")
-        total_saved_pairs = 0
-        for rel_img_subdir in rel_img_subdirs:
-            out_img_subdir = Path(output_dir) / rel_img_subdir
-            rel_lbl_subdir = Path(str(rel_img_subdir).replace('images', 'labels', 1))
-            out_lbl_subdir = Path(output_dir) / rel_lbl_subdir
-            out_img_subdir.mkdir(parents=True, exist_ok=True)
-            out_lbl_subdir.mkdir(parents=True, exist_ok=True)
-            file_counter = 0
-            for source_dir in input_dirs:
-                current_scan_dir = Path(source_dir) / rel_img_subdir
-                if not current_scan_dir.is_dir(): continue
-                # Recursively search within the subdirectory as well for robustness
-                images_in_subdir = sorted([p for fmt in image_formats for p in current_scan_dir.glob(f'**/*.{fmt}')])
-                for img_path in images_in_subdir:
-                    lbl_path = get_label_path(str(img_path))
-                    if os.path.exists(lbl_path):
-                        ext = img_path.suffix
-                        new_base = f"{file_counter:06d}"
-                        shutil.copy2(str(img_path), out_img_subdir / (new_base + ext))
-                        shutil.copy2(lbl_path, out_lbl_subdir / (new_base + '.txt'))
-                        file_counter += 1
-            print(f" - Merged {file_counter} pairs into '{rel_img_subdir}'")
-            total_saved_pairs += file_counter
-        print(f"\nStructured merge complete. {total_saved_pairs} total image-label pairs saved.")
-        return True
-    
-    else:
-        print(f"[Error] Unknown merge strategy: '{strategy}'")
+    target_subsets = [subset for subset in target_subsets if subset in STANDARD_SUBSETS]
+    if not target_subsets:
+        print("[Error] No valid target subsets specified.")
         return False
+
+    if target_structure not in {'images_first', 'subset_first'}:
+        print(f"[Error] Unknown target structure '{target_structure}'.")
+        return False
+
+    output_path = Path(output_dir)
+    if output_path.exists():
+        if not exist_ok:
+            print(f"[Error] Output directory already exists: {output_dir}")
+            return False
+        shutil.rmtree(output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    def assign_by_ratio(pairs: List[Tuple[str, str]], ratio_map: Dict[str, float]) -> Dict[str, List[Tuple[str, str]]]:
+        assignments = {subset: [] for subset in target_subsets}
+        if not pairs:
+            return assignments
+
+        pool = pairs[:]
+        random.shuffle(pool)
+        total = len(pool)
+        floored = []
+        for subset in target_subsets:
+            value = max(0.0, ratio_map.get(subset, 0.0))
+            floored.append(int(total * value))
+
+        distributed = sum(floored)
+        if distributed > total:
+            overflow = distributed - total
+            for idx in range(len(floored)):
+                if overflow <= 0:
+                    break
+                reduction = min(overflow, floored[idx])
+                floored[idx] -= reduction
+                overflow -= reduction
+
+        remainder = total - sum(floored)
+        index = 0
+        for idx, subset in enumerate(target_subsets):
+            count = floored[idx]
+            if idx == len(target_subsets) - 1:
+                count += remainder
+            assignments[subset] = pool[index:index + count]
+            index += count
+
+        if index < total:
+            assignments[target_subsets[-1]].extend(pool[index:])
+
+        return assignments
+
+    final_assignments: Dict[str, List[Tuple[str, str]]] = {subset: [] for subset in target_subsets}
+
+    for profile in profiles:
+        if ratio_plan.get('mode') == 'preserve':
+            for subset in target_subsets:
+                final_assignments[subset].extend(profile.subset_pairs.get(subset, []))
+        else:
+            pool: List[Tuple[str, str]] = []
+            for subset_pairs in profile.subset_pairs.values():
+                pool.extend(subset_pairs)
+            pool.extend(profile.unassigned_pairs)
+
+            if not pool:
+                continue
+
+            if ratio_plan.get('mode') == 'uniform':
+                ratio_map = ratio_plan['ratios']
+            elif ratio_plan.get('mode') == 'per_dataset':
+                ratio_map = ratio_plan['ratios'].get(profile.path, {})
+            else:
+                ratio_map = {}
+
+            ratio_map = {subset: ratio_map.get(subset, 0.0) for subset in target_subsets}
+            assignments = assign_by_ratio(pool, ratio_map)
+            for subset in target_subsets:
+                final_assignments[subset].extend(assignments[subset])
+
+    def ensure_destination_dirs(subset_name: str) -> Tuple[Path, Path]:
+        if target_structure == 'images_first':
+            img_dir = output_path / 'images' / subset_name
+            lbl_dir = output_path / 'labels' / subset_name
+        else:
+            img_dir = output_path / subset_name / 'images'
+            lbl_dir = output_path / subset_name / 'labels'
+        img_dir.mkdir(parents=True, exist_ok=True)
+        lbl_dir.mkdir(parents=True, exist_ok=True)
+        return img_dir, lbl_dir
+
+    saved_counts: Dict[str, int] = {}
+    for subset in target_subsets:
+        img_dir, lbl_dir = ensure_destination_dirs(subset)
+        counter = 0
+        pairs = final_assignments.get(subset, [])
+        if not pairs:
+            saved_counts[subset] = 0
+            continue
+
+        for img_path, lbl_path in tqdm(pairs, desc=f"Copying {subset} pairs"):
+            img_suffix = Path(img_path).suffix
+            base_name = f"{counter:06d}"
+            counter += 1
+            shutil.copy2(img_path, img_dir / f"{base_name}{img_suffix}")
+            shutil.copy2(lbl_path, lbl_dir / f"{base_name}.txt")
+
+        saved_counts[subset] = counter
+
+    summary = ", ".join(f"{subset}: {count}" for subset, count in saved_counts.items())
+    print(f"\nMerge complete. Saved pairs per split -> {summary}")
+    return True
 
 def get_all_image_data(source_dir, image_formats):
     """

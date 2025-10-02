@@ -51,7 +51,17 @@ class IntegratedLabeler:
         # Generate distinct colors for each class
         self.colors = {c: ((c*55+50)%256, (c*95+100)%256, (c*135+150)%256) for c in self.classes.keys()}
 
+        # Overlap detection threshold (clamped into a valid IoU range)
+        workflow_cfg = config.get('workflow_parameters', {}) if isinstance(config, dict) else {}
+        threshold = workflow_cfg.get('labeling_overlap_iou_threshold', 0.80)
+        try:
+            threshold = float(threshold)
+        except (TypeError, ValueError):
+            threshold = 0.80
+        self.overlap_iou_threshold = max(0.0, min(1.0, threshold))
+
         # --- Image and Data State ---
+        self.primary_image_paths, self.isolated_image_paths = [], []
         self.image_paths, self.filtered_image_indices = [], []
         self.img_index = 0
         self.current_class_id = default_class
@@ -66,6 +76,9 @@ class IntegratedLabeler:
         # --- UI State ---
         self.quit_flag = False
         self.mode, self.filter_mode = 'draw', 'all'
+        self.viewing_isolated = False
+        self.last_primary_index = 0
+        self.last_isolated_index = 0
         self.window_name = "Integrated Labeler"
         self.display_width = 1280 # Target width for the main display
 
@@ -154,22 +167,33 @@ class IntegratedLabeler:
             for p in glob.glob(os.path.join(self.dataset_dir, '**', f'*.{ext}'), recursive=True)
         ])
 
-        # Filter these paths to only include those located within a directory named 'images'.
-        # This robustly handles both '.../images/train/...' and '.../train/images/...' structures.
+        # Split into the active workspace and the isolated workspace.
         sep = os.path.sep
-        self.image_paths = [
+        self.primary_image_paths = [
             path for path in all_image_files
-            if f'{sep}images{sep}' in path
+            if f'{sep}images{sep}' in path and f'{sep}_isolated{sep}' not in path
+        ]
+        self.isolated_image_paths = [
+            path for path in all_image_files
+            if f'{sep}_isolated{sep}' in path and f'{sep}images{sep}' in path
         ]
 
+        self.viewing_isolated = False
+        self.image_paths = self.primary_image_paths
+
         if not self.image_paths:
+            if self.isolated_image_paths:
+                print("[Info] No active dataset images found. Switching to isolated workspace view.")
+                self.viewing_isolated = True
+                self._apply_filter()
+                return True
             print(f"[Error] No images found within any 'images' subdirectory in '{self.dataset_dir}'.")
             print("Please ensure your dataset follows a standard structure, such as:")
             print("1. dataset/images/{train,val}/...")
             print("2. dataset/{train,val}/images/...")
             return False
 
-        print(f"[Info] Found {len(self.image_paths)} images.")
+        print(f"[Info] Found {len(self.primary_image_paths)} images.")
         rev_path = os.path.join(self.dataset_dir, 'review_list.txt')
         if os.path.exists(rev_path):
             self.review_list = {ln.strip() for ln in open(rev_path, 'r') if ln.strip()}
@@ -222,13 +246,55 @@ class IntegratedLabeler:
             self.bbox_precise = [self._pixels_to_yolo(b) for b in self.current_bboxes]
 
     def _update_overlap_counts(self):
+        """Track overlapping clusters and mark the earliest drawn box only."""
         markers = {}
-        for bbox in self.current_bboxes:
-            _, x1, y1, x2, y2 = bbox
-            key = (int(x1), int(y1), int(x2), int(y2))
-            markers[key] = markers.get(key, 0) + 1
+        threshold = self.overlap_iou_threshold
+        num_boxes = len(self.current_bboxes)
 
-        self._overlap_markers = {key: count for key, count in markers.items() if count > 1}
+        if num_boxes <= 1 or threshold > 1.0:
+            self._overlap_markers = {}
+            return
+
+        neighbors = [set() for _ in range(num_boxes)]
+        coords = [(bbox[1], bbox[2], bbox[3], bbox[4]) for bbox in self.current_bboxes]
+
+        for i in range(num_boxes):
+            xi1, yi1, xi2, yi2 = coords[i]
+            for j in range(i + 1, num_boxes):
+                xj1, yj1, xj2, yj2 = coords[j]
+                iou = self._calculate_iou((xi1, yi1, xi2, yi2), (xj1, yj1, xj2, yj2))
+                if iou >= threshold:
+                    neighbors[i].add(j)
+                    neighbors[j].add(i)
+
+        visited = set()
+        for i in range(num_boxes):
+            if i in visited:
+                continue
+
+            if not neighbors[i]:
+                visited.add(i)
+                continue
+
+            stack = [i]
+            component = []
+            while stack:
+                idx = stack.pop()
+                if idx in visited:
+                    continue
+                visited.add(idx)
+                component.append(idx)
+                stack.extend(neighbors[idx])
+
+            if len(component) <= 1:
+                continue
+
+            anchor_idx = min(component)
+            _, ax1, ay1, ax2, ay2 = self.current_bboxes[anchor_idx]
+            key = (int(ax1), int(ay1), int(ax2), int(ay2))
+            markers[key] = len(component)
+
+        self._overlap_markers = markers
 
     def _move_last_bbox(self, dx, dy):
         if not self.current_bboxes:
@@ -323,13 +389,156 @@ class IntegratedLabeler:
 
         return history_idx
 
-    def _isolate_current_image(self):
-        p=self.image_paths[self.img_index]; lp=get_label_path(p); iso_dir=os.path.join(self.dataset_dir,'_isolated')
-        [os.makedirs(os.path.join(iso_dir,d),exist_ok=True) for d in ['images','labels']]
-        shutil.move(p,os.path.join(iso_dir,'images',os.path.basename(p)))
-        if os.path.exists(lp): shutil.move(lp,os.path.join(iso_dir,'labels',os.path.basename(lp)))
-        self.image_paths.pop(self.img_index); self._apply_filter(); self.img_index=min(self.img_index,len(self.filtered_image_indices)-1)
+    def _scale_last_bbox_width(self, grow):
+        """Adjust only the width of the most recent bounding box."""
+        if not self.current_bboxes:
+            self.active_bbox_index = None
+            return
+
+        self._ensure_precise_state()
+
+        if self.active_bbox_index is None or not (0 <= self.active_bbox_index < len(self.current_bboxes)):
+            self.active_bbox_index = len(self.current_bboxes) - 1
+
+        cid, x1, y1, x2, y2 = self.current_bboxes[self.active_bbox_index]
+        width = x2 - x1
+        if width <= 1:
+            return
+
+        if not grow and width <= 2:
+            return
+
+        delta = 1 if grow else -1
+        new_x1 = x1 - delta
+        new_x2 = x2 + delta
+
+        scaled = self._sanitize_bbox_for_current_image((cid, new_x1, y1, new_x2, y2))
+        if scaled is None:
+            return
+
+        scaled_width = scaled[3] - scaled[1]
+        if scaled_width <= 1:
+            return
+
+        if not grow and scaled_width >= width:
+            return
+        if grow and scaled_width <= width:
+            return
+
+        history_idx = self._push_history()
+        self.current_bboxes[self.active_bbox_index] = scaled
+        self.clipboard_bbox = scaled
+        if len(self.bbox_precise) > self.active_bbox_index:
+            self.bbox_precise[self.active_bbox_index] = self._pixels_to_yolo(scaled)
         self._update_overlap_counts()
+
+        return history_idx
+
+    def _isolate_current_image(self):
+        if self.viewing_isolated:
+            # Return image back to the main dataset using its relative path inside _isolated
+            if not self.image_paths:
+                return
+
+            current_idx = self.img_index
+            image_path = self.image_paths[current_idx]
+            rel_inside_iso = os.path.relpath(image_path, os.path.join(self.dataset_dir, '_isolated'))
+            target_path = os.path.join(self.dataset_dir, rel_inside_iso)
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            shutil.move(image_path, target_path)
+
+            label_path = get_label_path(image_path)
+            if os.path.exists(label_path):
+                rel_label_inside_iso = os.path.relpath(label_path, os.path.join(self.dataset_dir, '_isolated'))
+                target_label_path = os.path.join(self.dataset_dir, rel_label_inside_iso)
+                os.makedirs(os.path.dirname(target_label_path), exist_ok=True)
+                shutil.move(label_path, target_label_path)
+
+            self.image_paths.pop(current_idx)
+            self.isolated_image_paths = self.image_paths
+            self.primary_image_paths.append(target_path)
+            self.primary_image_paths.sort()
+            try:
+                new_primary_index = self.primary_image_paths.index(target_path)
+            except ValueError:
+                new_primary_index = len(self.primary_image_paths) - 1
+            self.last_primary_index = new_primary_index
+
+            if not self.image_paths:
+                self.filtered_image_indices = []
+                self.img_index = 0
+                self.viewing_isolated = False
+                self.image_paths = self.primary_image_paths
+                self._apply_filter(announce=True)
+                if self.filtered_image_indices:
+                    self.img_index = min(self.last_primary_index, len(self.filtered_image_indices) - 1)
+                return
+
+            self._apply_filter(announce=True)
+            if self.filtered_image_indices:
+                if current_idx < len(self.filtered_image_indices):
+                    self.img_index = self.filtered_image_indices[current_idx % len(self.filtered_image_indices)]
+                else:
+                    self.img_index = self.filtered_image_indices[-1]
+            else:
+                self.img_index = 0
+            self._update_overlap_counts()
+            self.last_isolated_index = self.img_index
+            return
+
+        if not self.image_paths:
+            return
+
+        current_idx = self.img_index
+        image_path = self.image_paths[current_idx]
+        label_path = get_label_path(image_path)
+        iso_dir = os.path.join(self.dataset_dir, '_isolated')
+
+        rel_image_path = os.path.relpath(image_path, self.dataset_dir)
+        target_image_path = os.path.join(iso_dir, rel_image_path)
+        os.makedirs(os.path.dirname(target_image_path), exist_ok=True)
+        shutil.move(image_path, target_image_path)
+
+        if os.path.exists(label_path):
+            rel_label_path = os.path.relpath(label_path, self.dataset_dir)
+            target_label_path = os.path.join(iso_dir, rel_label_path)
+            os.makedirs(os.path.dirname(target_label_path), exist_ok=True)
+            shutil.move(label_path, target_label_path)
+
+        self.review_list.discard(os.path.basename(image_path))
+
+        self.image_paths.pop(current_idx)
+        self.primary_image_paths = self.image_paths  # keep reference explicit
+        self.isolated_image_paths.append(target_image_path)
+        self.isolated_image_paths.sort()
+        try:
+            new_iso_index = self.isolated_image_paths.index(target_image_path)
+        except ValueError:
+            new_iso_index = len(self.isolated_image_paths) - 1
+        self.last_isolated_index = new_iso_index
+
+        if not self.image_paths:
+            self.filtered_image_indices = []
+            self.img_index = 0
+            self.current_bboxes = []
+            self.bbox_precise = []
+            self._overlap_markers = {}
+            return
+
+        announce = self.filter_mode != 'all'
+        self._apply_filter(announce=announce)
+
+        if self.filtered_image_indices:
+            next_candidates = [idx for idx in self.filtered_image_indices if idx >= current_idx]
+            if next_candidates:
+                self.img_index = next_candidates[0]
+            else:
+                self.img_index = self.filtered_image_indices[-1]
+        else:
+            self.img_index = min(current_idx, len(self.image_paths) - 1)
+        self._update_overlap_counts()
+        self.last_primary_index = self.img_index
+        self.last_isolated_index = min(self.last_isolated_index, len(self.isolated_image_paths) - 1) if self.isolated_image_paths else 0
 
     def _redraw_ui(self):
         self._update_overlap_counts()
@@ -530,16 +739,162 @@ class IntegratedLabeler:
             if self.first_point is not None:
                 self.first_point = None
 
-    def _apply_filter(self):
-        if self.filter_mode=='review': self.filtered_image_indices=[i for i,p in enumerate(self.image_paths) if os.path.basename(p) in self.review_list]
-        else: self.filtered_image_indices=list(range(len(self.image_paths)))
-        if not self.filtered_image_indices: self.filtered_image_indices=list(range(len(self.image_paths)))
+    def _is_image_unlabeled(self, image_path):
+        label_path = get_label_path(image_path)
+        if not os.path.exists(label_path):
+            return True
+        try:
+            with open(label_path, 'r') as f:
+                for line in f:
+                    if line.strip():
+                        return False
+            return True
+        except OSError:
+            return True
+
+    def _has_overlapping_boxes(self, image_path):
+        label_path = get_label_path(image_path)
+        if not os.path.exists(label_path):
+            return False
+
+        boxes = []
+        try:
+            with open(label_path, 'r') as f:
+                for line in f:
+                    tokens = line.strip().split()
+                    if len(tokens) < 5:
+                        continue
+                    try:
+                        _, cx, cy, bw, bh = map(float, tokens[:5])
+                    except ValueError:
+                        continue
+                    if bw <= 0 or bh <= 0:
+                        continue
+                    x1 = max(0.0, cx - bw / 2)
+                    y1 = max(0.0, cy - bh / 2)
+                    x2 = min(1.0, cx + bw / 2)
+                    y2 = min(1.0, cy + bh / 2)
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+                    boxes.append((x1, y1, x2, y2))
+        except OSError:
+            return False
+
+        threshold = self.overlap_iou_threshold
+        for i in range(len(boxes)):
+            x1_a, y1_a, x2_a, y2_a = boxes[i]
+            for j in range(i + 1, len(boxes)):
+                x1_b, y1_b, x2_b, y2_b = boxes[j]
+                inter_x1 = max(x1_a, x1_b)
+                inter_y1 = max(y1_a, y1_b)
+                inter_x2 = min(x2_a, x2_b)
+                inter_y2 = min(y2_a, y2_b)
+                if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+                    continue
+                inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+                area_a = (x2_a - x1_a) * (y2_a - y1_a)
+                area_b = (x2_b - x1_b) * (y2_b - y1_b)
+                union = area_a + area_b - inter_area
+                if union <= 0:
+                    continue
+                iou = inter_area / union
+                if iou >= threshold:
+                    return True
+        return False
+
+    def _apply_filter(self, announce=False, preserve_on_empty=False):
+        paths = self.isolated_image_paths if self.viewing_isolated else self.primary_image_paths
+        self.image_paths = paths
+
+        if not paths:
+            self.filtered_image_indices = []
+            if announce:
+                view_label = 'Isolated view' if self.viewing_isolated else 'Dataset view'
+                print(f"-> {view_label}: No images available.")
+            return 0
+
+        if self.filter_mode == 'review' and not self.viewing_isolated:
+            indices = [i for i, p in enumerate(paths) if os.path.basename(p) in self.review_list]
+        elif self.filter_mode == 'overlap':
+            indices = [i for i, p in enumerate(paths) if self._has_overlapping_boxes(p)]
+        elif self.filter_mode == 'unlabeled':
+            indices = [i for i, p in enumerate(paths) if self._is_image_unlabeled(p)]
+        else:
+            indices = list(range(len(paths)))
+
+        if not indices:
+            if self.filter_mode != 'all':
+                if announce:
+                    if preserve_on_empty:
+                        print(f"[Info] No images matched the '{self.filter_mode}' filter.")
+                    else:
+                        print(f"[Info] No images matched the '{self.filter_mode}' filter. Reverting to 'all'.")
+                if preserve_on_empty:
+                    return 0
+                self.filter_mode = 'all'
+                indices = list(range(len(paths)))
+            else:
+                indices = list(range(len(paths)))
+
+        self.filtered_image_indices = indices
+
+        if announce:
+            mode_label = {
+                'all': 'All images',
+                'review': 'Review flagged images',
+                'overlap': 'Images with overlapping boxes',
+                'unlabeled': 'Unlabeled images only'
+            }.get(self.filter_mode, self.filter_mode)
+            view_label = 'Isolated view' if self.viewing_isolated else 'Dataset view'
+            print(f"-> {view_label}: {mode_label} ({len(indices)} images)")
+
+        return len(indices)
 
     def _navigate(self,d):
         self._save_current_labels()
         try: cur=self.filtered_image_indices.index(self.img_index)
         except ValueError: cur=0
         self.img_index=self.filtered_image_indices[max(0,min(cur+d,len(self.filtered_image_indices)-1))]
+        if self.viewing_isolated:
+            self.last_isolated_index = self.img_index
+        else:
+            self.last_primary_index = self.img_index
+
+    def _toggle_isolated_view(self):
+        if self.viewing_isolated:
+            self.last_isolated_index = self.img_index
+            self.viewing_isolated = False
+            if self.primary_image_paths:
+                self.last_primary_index = min(self.last_primary_index, len(self.primary_image_paths) - 1)
+            self.filter_mode = 'all' if self.filter_mode == 'review' else self.filter_mode
+            self._apply_filter(announce=True)
+            if self.filtered_image_indices:
+                target = self.last_primary_index if self.primary_image_paths else 0
+                if target in self.filtered_image_indices:
+                    self.img_index = target
+                else:
+                    self.img_index = self.filtered_image_indices[0]
+            else:
+                self.img_index = 0
+            self.last_primary_index = self.img_index
+        else:
+            if not self.isolated_image_paths:
+                print("[Info] No isolated images to display.")
+                return
+            self.last_primary_index = self.img_index
+            self.viewing_isolated = True
+            self.filter_mode = 'all'
+            self._apply_filter(announce=True)
+            self.last_isolated_index = min(self.last_isolated_index, len(self.isolated_image_paths) - 1)
+            if self.filtered_image_indices:
+                target = self.last_isolated_index
+                if target in self.filtered_image_indices:
+                    self.img_index = target
+                else:
+                    self.img_index = self.filtered_image_indices[0]
+            else:
+                self.img_index = 0
+            self.last_isolated_index = self.img_index
 
     def _load_image_and_labels(self):
         if not (0 <= self.img_index < len(self.image_paths)):
@@ -594,6 +949,7 @@ class IntegratedLabeler:
         print("  - [V]: Paste Last Bounding Box")
         print("  - [Arrow Keys]: Nudge Most Recent Bounding Box")
         print("  - [T/Y]: Grow/Shrink Most Recent Bounding Box")
+        print("  - [G/H]: Widen/Narrow Most Recent Bounding Box")
         print("  - [1-9]: Select Class")
         print("  - [I]: Toggle Class Name Overlay")
         print("-" * 50)
@@ -605,7 +961,11 @@ class IntegratedLabeler:
         print("-" * 50)
         print(" Workflow:")
         print("  - [F]: Flag / Unflag for Review")
-        print("  - [G]: Toggle Filter (All / Review)")
+        print("  - [J]: Show All Images")
+        print("  - [K]: Show Review-Flagged Images")
+        print("  - [N]: Show Overlapping Images")
+        print("  - [M]: Show Unlabeled Images")
+        print("  - [O]: Toggle View (Dataset / Isolated)")
         print("  - [X]: Exclude Current Image")
         print("="*50)
 
@@ -620,13 +980,20 @@ class IntegratedLabeler:
                 else: print("[Info] No more images to label."); break
 
             while True:
-                img_name = os.path.basename(self.image_paths[self.img_index])
+                image_path = self.image_paths[self.img_index]
+                img_name = os.path.basename(image_path)
+                relative_dir = os.path.relpath(os.path.dirname(image_path), self.dataset_dir)
+                if relative_dir == '.' or relative_dir.startswith('..'):
+                    relative_dir = ''
+                else:
+                    relative_dir = relative_dir.replace(os.sep, '/')
+                display_name = f"{relative_dir}/{img_name}" if relative_dir else img_name
                 try:
                     progress = f"({self.filtered_image_indices.index(self.img_index) + 1}/{len(self.filtered_image_indices)})"
                 except ValueError:
                     progress = "(0/0)"
 
-                title = f"Labeler {progress} - {img_name} - MODE: {self.mode.upper()}"
+                title = f"Labeler {progress} - {display_name} - MODE: {self.mode.upper()}"
                 if self.mode == 'draw':
                     title += f" (Class: {self.classes.get(self.current_class_id, 'N/A')})"
                 cv2.setWindowTitle(self.window_name, title)
@@ -673,6 +1040,10 @@ class IntegratedLabeler:
                     self._scale_last_bbox(grow=True)
                 elif key_lower == 'y':
                     self._scale_last_bbox(grow=False)
+                elif key_lower == 'g':
+                    self._scale_last_bbox_width(grow=True)
+                elif key_lower == 'h':
+                    self._scale_last_bbox_width(grow=False)
                 elif key_lower == 'v':
                     if self.clipboard_bbox is None:
                         print("[Info] No bounding box available to paste yet.")
@@ -712,10 +1083,73 @@ class IntegratedLabeler:
                     else: self.review_list.add(n)
                 elif key_lower == 'x': # Exclude
                     self._isolate_current_image(); break
-                elif key_lower == 'g': # Toggle filter
-                    self.filter_mode = 'review' if self.filter_mode == 'all' else 'all'
-                    self._apply_filter()
-                    if self.filtered_image_indices: self.img_index = self.filtered_image_indices[0]
+                elif key_lower == 'j': # Show all images
+                    if self.filter_mode != 'all' or not self.filtered_image_indices:
+                        previous_index = self.img_index
+                        self.filter_mode = 'all'
+                        self._apply_filter(announce=True)
+                        if self.filtered_image_indices:
+                            if previous_index in self.filtered_image_indices:
+                                self.img_index = previous_index
+                            else:
+                                self.img_index = self.filtered_image_indices[0]
+                        if self.viewing_isolated:
+                            self.last_isolated_index = self.img_index
+                        else:
+                            self.last_primary_index = self.img_index
+                        break
+                    else:
+                        print("[Info] Already showing all images.")
+                elif key_lower == 'k': # Review filter
+                    if self.viewing_isolated:
+                        print("[Info] Review filter is unavailable in isolated view.")
+                        continue
+                    previous_mode = self.filter_mode
+                    previous_indices = list(getattr(self, 'filtered_image_indices', []))
+                    self.filter_mode = 'review'
+                    result = self._apply_filter(announce=True, preserve_on_empty=True)
+                    if result == 0:
+                        self.filter_mode = previous_mode
+                        self.filtered_image_indices = previous_indices
+                        continue
+                    if self.filtered_image_indices:
+                        self.img_index = self.filtered_image_indices[0]
+                    self.last_primary_index = self.img_index
+                    break
+                elif key_lower == 'n': # Overlap filter
+                    previous_mode = self.filter_mode
+                    previous_indices = list(getattr(self, 'filtered_image_indices', []))
+                    self.filter_mode = 'overlap'
+                    result = self._apply_filter(announce=True, preserve_on_empty=True)
+                    if result == 0:
+                        self.filter_mode = previous_mode
+                        self.filtered_image_indices = previous_indices
+                        continue
+                    if self.filtered_image_indices:
+                        self.img_index = self.filtered_image_indices[0]
+                    if self.viewing_isolated:
+                        self.last_isolated_index = self.img_index
+                    else:
+                        self.last_primary_index = self.img_index
+                    break
+                elif key_lower == 'm': # Unlabeled filter
+                    previous_mode = self.filter_mode
+                    previous_indices = list(getattr(self, 'filtered_image_indices', []))
+                    self.filter_mode = 'unlabeled'
+                    result = self._apply_filter(announce=True, preserve_on_empty=True)
+                    if result == 0:
+                        self.filter_mode = previous_mode
+                        self.filtered_image_indices = previous_indices
+                        continue
+                    if self.filtered_image_indices:
+                        self.img_index = self.filtered_image_indices[0]
+                    if self.viewing_isolated:
+                        self.last_isolated_index = self.img_index
+                    else:
+                        self.last_primary_index = self.img_index
+                    break
+                elif key_lower == 'o': # Toggle isolated workspace view
+                    self._toggle_isolated_view()
                     break
 
         self._save_review_list()
